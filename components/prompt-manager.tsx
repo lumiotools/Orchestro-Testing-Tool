@@ -38,7 +38,7 @@ import { Label } from "@/components/ui/label"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 
 // Base URL for API calls
-const API_BASE_URL = "http://localhost:8080/api/v1"
+const API_BASE_URL = "http://localhost:8081/api/v1"
 
 interface Prompt {
   id: string

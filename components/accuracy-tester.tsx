@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -11,10 +11,19 @@ import { Play, RotateCcw, Download, Zap, Brain, Globe, Sparkles, Cpu } from "luc
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { ModelSelector, availableModels } from "@/components/model-selector"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useToast } from "@/hooks/use-toast"
+
+const API_BASE_URL = "http://localhost:8081/api/v1"
 
 export function AccuracyTester() {
-  const [category, setCategory] = useState("eligible")
-  const [prompt, setPrompt] = useState("eligible-v1")
+  const [category, setCategory] = useState("select")
+  const [prompt, setPrompt] = useState<any>(null)
+  const [contracts, setContracts] = useState<any>([])
+  const [groundTruth, setGroundTruth] = useState<any>([])
+  const [selectedPrompt, setSelectedPrompt] = useState<any>(null)
+  const [selectedContract, setSelectedContract] = useState<any>(null)
+  const [selectedGroundTruth, setSelectedGroundTruth] = useState<any>(null)
+  const [selectedPrompts, setSelectedPrompts] = useState<any>({})
   const [sampleSize, setSampleSize] = useState(50)
   const [isRunning, setIsRunning] = useState(false)
   const [progress, setProgress] = useState(0)
@@ -22,61 +31,40 @@ export function AccuracyTester() {
   const [selectedModels, setSelectedModels] = useState(["gpt-4o", "claude-3-5-sonnet", "gemini-2.0-flash"])
   const [primaryModel, setPrimaryModel] = useState("gpt-4o")
   const [testMode, setTestMode] = useState<"single" | "comparison">("single")
+  const [loading, setLoading] = useState(false)
+  const [isContractLoading, setIsContractLoading] = useState(false)
+  const [isGroundTruthLoading, setIsGroundTruthLoading] = useState(false)
+  const { toast } = useToast()
 
-  const handleRunTest = () => {
+  const handleRunTest = async () => {
     setIsRunning(true)
-    setProgress(0)
-    setResults(null)
-
-    const interval = setInterval(() => {
-      setProgress((prev) => {
-        const newProgress = prev + 2
-        if (newProgress >= 100) {
-          clearInterval(interval)
-          setIsRunning(false)
-
-          if (testMode === "single") {
-            setResults({
-              accuracy: 92.3,
-              totalContracts: sampleSize,
-              correctExtractions: Math.floor(sampleSize * 0.923),
-              incorrectExtractions: sampleSize - Math.floor(sampleSize * 0.923),
-              avgConfidence: 0.89,
-              model: primaryModel,
-              details: Array.from({ length: 10 }, (_, i) => ({
-                contractId: `C-${String(i + 1).padStart(3, "0")}`,
-                correct: Math.random() > 0.1,
-                confidence: 0.7 + Math.random() * 0.3,
-                extractedValue: i % 3 === 0 ? "$10,000" : i % 3 === 1 ? "$25,500" : "$8,750",
-                expectedValue: i % 3 === 0 ? "$10,000" : i % 3 === 1 ? "$25,000" : "$8,750",
-              })),
-            })
-          } else {
-            // Generate comparison results for multiple models
-            setResults({
-              modelComparison: selectedModels.map((modelId) => {
-                const model = availableModels.find((m) => m.id === modelId)
-                const baseAccuracy = 85 + Math.random() * 15
-                return {
-                  modelId,
-                  modelName: model?.name || modelId,
-                  provider: model?.provider || "Unknown",
-                  accuracy: Number(baseAccuracy.toFixed(1)),
-                  avgConfidence: 0.8 + Math.random() * 0.2,
-                  avgResponseTime: 1.2 + Math.random() * 2.8,
-                  cost: (model?.costPer1kTokens || 0.001) * sampleSize * 2.5,
-                  correctExtractions: Math.floor(sampleSize * (baseAccuracy / 100)),
-                  incorrectExtractions: sampleSize - Math.floor(sampleSize * (baseAccuracy / 100)),
-                }
-              }),
-              totalContracts: sampleSize,
-            })
-          }
-          return 100
-        }
-        return newProgress
+    const data = {
+      prompt_ids: Object.values(selectedPrompts),
+      contract_id: selectedContract,
+      ground_truth_id: selectedGroundTruth,
+      save_results: false,
+      contract_file_source: contracts.find((contract: any) => contract.contract_id === selectedContract)?.contract_file_url,
+      contract_name: contracts.find((contract: any) => contract.contract_id === selectedContract)?.contract_file_name
+    };
+    try {
+      const response = await fetch(`${API_BASE_URL}/prompt/prompts/test`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(data),
+      });
+      const responseData = await response.json();
+      console.log("🚀 => responseData:", responseData);
+    } catch (error) {
+      toast({
+        title: "Error fetching prompts",
+        description: "Please try again later",
+        variant: "destructive",
       })
-    }, 100)
+    } finally {
+      setIsRunning(false)
+    }
   }
 
   const getProviderIcon = (provider: string) => {
@@ -95,6 +83,91 @@ export function AccuracyTester() {
         return <Cpu className="h-4 w-4" />
     }
   }
+
+  const getPrompts = async () => {
+    try {
+      setLoading(true)
+      const response = await fetch(`${API_BASE_URL}/prompt/prompts`,
+        {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      )
+      const data = await response.json()
+      const segregatedPrompts = segregatePrompts(data.prompts)
+      console.log(segregatedPrompts)
+      setPrompt(segregatedPrompts)
+      setCategory(Object.keys(segregatedPrompts)[0])
+      setSelectedPrompt(segregatedPrompts[Object.keys(segregatedPrompts)[0] as keyof typeof segregatedPrompts][0])
+    } catch (error) {
+      toast({
+        title: "Error fetching prompts",
+        description: "Please try again later",
+        variant: "destructive",
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const getContracts = async () => {
+    try {
+      setIsContractLoading(true)
+      const response = await fetch(`${API_BASE_URL}/contract/list?timestamp=${new Date().getTime()}`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": localStorage.getItem("accessToken") || "",
+        },
+      })
+      const data = await response.json()
+      const nonGroundTruthContracts = data.data.contracts.filter((contract: any) => !contract.ground_truth)
+      console.log("🚀 => nonGroundTruthContracts:", nonGroundTruthContracts);
+      setContracts(nonGroundTruthContracts)
+      const groundTruthContracts = data.data.contracts.filter((contract: any) => contract.ground_truth)
+      console.log("🚀 => data.data.contracts:", data.data.contracts);
+      console.log("🚀 => groundTruthContracts:", groundTruthContracts);
+      setGroundTruth(groundTruthContracts)
+    } catch (error) {
+      toast({
+        title: "Error fetching contracts",
+        description: "Please try again later",
+        variant: "destructive",
+      })
+    } finally {
+      setIsContractLoading(false)
+    }
+  }
+
+  const segregatePrompts = (prompts: any) => {
+    const eligiblePrompts = prompts.filter((prompt: any) => prompt.category === "Eligible_accounts")
+    const incentivePrompts = prompts.filter((prompt: any) => prompt.category === "Incentive_base_discounts")
+    const tierPrompts = prompts.filter((prompt: any) => prompt.category === "Tier")
+    const minimumsPrompts = prompts.filter((prompt: any) => prompt.category === "Minimums")
+    const servicePrompts = prompts.filter((prompt: any) => prompt.category === "Service_adjustments")
+    const accessorialsPrompts = prompts.filter((prompt: any) => prompt.category === "Accessorials")
+    const ePLDPrompts = prompts.filter((prompt: any) => prompt.category === "ePLD")
+    const dimPrompts = prompts.filter((prompt: any) => prompt.category === "DIM")
+
+    return {
+      "Eligible Accounts": eligiblePrompts,
+      "Incentive Base Discounts": incentivePrompts,
+      "Tier": tierPrompts,
+      "Minimums": minimumsPrompts,
+      "Service Adjustments": servicePrompts,
+      "Accessorials": accessorialsPrompts,
+      "ePLD": ePLDPrompts,
+      "DIM": dimPrompts,
+    }
+  }
+
+
+  useEffect(() => {
+    getPrompts();
+    getContracts();
+  }, [])
 
   return (
     <div className="space-y-6">
@@ -116,70 +189,141 @@ export function AccuracyTester() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium text-white">Category</label>
-                <Select value={category} onValueChange={setCategory}>
+                <Select
+                  value={category}
+                  onValueChange={(value) => {
+                    setCategory(value);
+                    if (prompt && prompt[value] && prompt[value].length > 0) {
+                      setSelectedPrompt(prompt[value][0].id || prompt[value][0].name);
+                      setSelectedPrompts({ ...selectedPrompts, [value]: prompt[value][0].id || prompt[value][0].name })
+                    }
+                  }}
+                >
                   <SelectTrigger className="bg-white/5 border-white/10 text-white">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="bg-gray-900 border-white/20">
-                    <SelectItem value="eligible" className="text-white hover:bg-white/10">
-                      Eligible accounts
-                    </SelectItem>
-                    <SelectItem value="incentive" className="text-white hover:bg-white/10">
-                      Incentive base discounts
-                    </SelectItem>
-                    <SelectItem value="tier" className="text-white hover:bg-white/10">
-                      Tier
-                    </SelectItem>
-                    <SelectItem value="minimums" className="text-white hover:bg-white/10">
-                      Minimums
-                    </SelectItem>
-                    <SelectItem value="service" className="text-white hover:bg-white/10">
-                      Service adjustments
-                    </SelectItem>
-                    <SelectItem value="accessorials" className="text-white hover:bg-white/10">
-                      Accessorials
-                    </SelectItem>
-                    <SelectItem value="epld" className="text-white hover:bg-white/10">
-                      ePLD
-                    </SelectItem>
+                    {loading ? (
+                      <div className="text-white px-4 py-2">Loading...</div>
+                    ) : (
+                      <>
+                        <SelectItem value="select" className="text-white hover:bg-white/10">
+                          Select Category
+                        </SelectItem>
+                        {prompt && Object.keys(prompt).map((category: any) => (
+                          <SelectItem key={category} value={category} className="text-white hover:bg-white/10">
+                            {category}
+                          </SelectItem>
+                        ))}
+                      </>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
 
               <div className="space-y-2">
                 <label className="text-sm font-medium text-white">Prompt</label>
-                <Select value={prompt} onValueChange={setPrompt}>
+                <Select value={selectedPrompt} onValueChange={(value) => {
+                  setSelectedPrompts({ ...selectedPrompts, [category]: value })
+                  setSelectedPrompt(value)
+                }}>
                   <SelectTrigger className="bg-white/5 border-white/10 text-white">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="bg-gray-900 border-white/20">
-                    <SelectItem value="eligible-v1" className="text-white hover:bg-white/10">
-                      EligibleAccounts-v1 (85.2%)
-                    </SelectItem>
-                    <SelectItem value="eligible-v2" className="text-white hover:bg-white/10">
-                      EligibleAccounts-v2 (88.7%)
-                    </SelectItem>
-                    <SelectItem value="eligible-v3" className="text-white hover:bg-white/10">
-                      EligibleAccounts-v3 (89.2%)
-                    </SelectItem>
+                    {loading ? (
+                      <div className="text-white px-4 py-2">Loading...</div>
+                    ) : (
+                      <>
+                        {prompt && prompt[category].map((promptItem: any) => (
+                          <SelectItem
+                            key={promptItem.id || promptItem.name}
+                            value={promptItem.id || promptItem.name}
+                            className="text-white hover:bg-white/10 cursor-pointer transition-colors duration-200"
+                          >
+                            <div className="flex items-center justify-between w-full py-1">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-white truncate">
+                                  {promptItem.name || promptItem.id}
+                                </p>
+                              </div>
+                              <div className="flex-shrink-0 ml-3">
+                                <span
+                                  className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${promptItem.status === "active"
+                                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                                    : "bg-red-500/20 text-red-300 border border-red-500/30"
+                                    }`}
+                                >
+                                  {promptItem.status}
+                                </span>
+                              </div>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
             </div>
 
             <div className="space-y-2">
-              <div className="flex justify-between">
-                <label className="text-sm font-medium text-white">Sample Size</label>
-                <span className="text-sm text-gray-400">{sampleSize} contracts</span>
-              </div>
-              <Slider
-                value={[sampleSize]}
-                min={10}
-                max={100}
-                step={10}
-                onValueChange={(value) => setSampleSize(value[0])}
-                className="[&_[role=slider]]:bg-emerald-500"
-              />
+              <label className="text-sm font-medium text-white">Choose Contracts</label>
+              <Select value={selectedContract} onValueChange={setSelectedContract}>
+                <SelectTrigger className="bg-white/5 border-white/10 text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-gray-900 border-white/20">
+                  {isContractLoading ? (
+                    <div className="text-white px-4 py-2">Loading...</div>
+                  ) : (
+                    contracts.length > 0 ? contracts.map((contract: any) => (
+                      <SelectItem
+                        key={contract.contract_id}
+                        value={contract.contract_id}
+                        className="text-white hover:bg-white/10"
+                      >
+                        {contract.contract_file_name} - {contract?.carrier}
+                      </SelectItem>
+                    )) : (
+                      <SelectItem value="no-contracts" className="text-white hover:bg-white/10">
+                        No contracts found
+                      </SelectItem>
+                    )
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-white">Choose Ground Truth</label>
+              <Select value={selectedGroundTruth} onValueChange={setSelectedGroundTruth}>
+                <SelectTrigger className="bg-white/5 border-white/10 text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-gray-900 border-white/20">
+                  {isGroundTruthLoading ? (
+                    <div className="text-white px-4 py-2">Loading...</div>
+                  ) : (
+                    <>
+                      {groundTruth.length > 0 ? groundTruth.map((groundTruthItem: any) => (
+                        <SelectItem
+                          key={groundTruthItem.contract_id}
+                          value={groundTruthItem.contract_id}
+                          className="text-white hover:bg-white/10"
+                        >
+                          {groundTruthItem.contract_file_name} - {groundTruthItem?.carrier}
+                        </SelectItem>
+                      )) : (
+                        <SelectItem value="no-ground-truth" className="text-white hover:bg-white/10">
+                          No ground truth found
+                        </SelectItem>
+                      )}
+                    </>
+                  )}
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="flex gap-2">
@@ -224,6 +368,106 @@ export function AccuracyTester() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Selection Summary */}
+      {Object.keys(selectedPrompts).length > 0 && (
+        <Card className="glass-card border-0">
+          <CardHeader className="border-b border-white/10">
+            <CardTitle className="text-lg text-white">Selection Summary</CardTitle>
+            <CardDescription className="text-gray-400">Current test configuration</CardDescription>
+          </CardHeader>
+          <CardContent className="pt-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Selected Prompts by Category */}
+              <div className="lg:col-span-2 space-y-4">
+                <div>
+                  <label className="text-xs font-medium text-gray-400 uppercase tracking-wider">Selected Prompts</label>
+                  <div className="mt-2 space-y-3">
+                    {Object.entries(selectedPrompts).reverse().map(([categoryName, promptId]) => {
+                      if (!promptId || !prompt || !prompt[categoryName]) return null;
+                      const selectedPromptData = prompt[categoryName].find((p: any) => (p.id || p.name) === promptId);
+                      return (
+                        <div key={categoryName} className="flex items-center justify-between p-3 bg-white/5 rounded-lg border border-white/10">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <Badge variant="outline" className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30 text-xs">
+                                {categoryName}
+                              </Badge>
+                            </div>
+                            {selectedPromptData ? (
+                              <div className="flex items-center gap-2">
+                                <p className="text-sm font-medium text-white">{selectedPromptData.name || selectedPromptData.id}</p>
+                                <Badge
+                                  variant="outline"
+                                  className={`text-xs ${selectedPromptData.status === "active"
+                                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+                                    : "bg-red-500/20 text-red-300 border border-red-500/30"
+                                    }`}
+                                >
+                                  {selectedPromptData.status}
+                                </Badge>
+                              </div>
+                            ) : (
+                              <p className="text-sm text-gray-400">Prompt not found</p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Selected Contract & Ground Truth */}
+              <div className="space-y-4">
+                {/* Selected Contract */}
+                <div>
+                  <label className="text-xs font-medium text-gray-400 uppercase tracking-wider">Selected Contract</label>
+                  <div className="mt-2 p-3 bg-white/5 rounded-lg border border-white/10">
+                    {selectedContract && contracts.length > 0 ? (() => {
+                      const selectedContractData = contracts.find((c: any) => c.contract_id === selectedContract);
+                      return selectedContractData ? (
+                        <div>
+                          <p className="text-sm font-medium text-white">{selectedContractData.contract_file_name}</p>
+                          {selectedContractData.carrier && (
+                            <p className="text-xs text-gray-400">{selectedContractData.carrier}</p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-400">Contract not found</p>
+                      );
+                    })() : (
+                      <p className="text-sm text-gray-400">No contract selected</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Selected Ground Truth */}
+                <div>
+                  <label className="text-xs font-medium text-gray-400 uppercase tracking-wider">Selected Ground Truth</label>
+                  <div className="mt-2 p-3 bg-white/5 rounded-lg border border-white/10">
+                    {selectedGroundTruth && groundTruth.length > 0 ? (() => {
+                      const selectedGroundTruthData = groundTruth.find((gt: any) => gt.contract_id === selectedGroundTruth);
+                      return selectedGroundTruthData ? (
+                        <div>
+                          <p className="text-sm font-medium text-white">{selectedGroundTruthData.contract_file_name}</p>
+                          {selectedGroundTruthData.carrier && (
+                            <p className="text-xs text-gray-400">{selectedGroundTruthData.carrier}</p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-400">Ground truth not found</p>
+                      );
+                    })() : (
+                      <p className="text-sm text-gray-400">No ground truth selected</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Results */}
       {results && (
@@ -299,9 +543,8 @@ export function AccuracyTester() {
                           <TableCell>
                             <Badge
                               variant="outline"
-                              className={`border-0 ${
-                                detail.correct ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/20 text-red-400"
-                              }`}
+                              className={`border-0 ${detail.correct ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/20 text-red-400"
+                                }`}
                             >
                               {detail.correct ? "Correct" : "Incorrect"}
                             </Badge>
@@ -370,13 +613,12 @@ export function AccuracyTester() {
                           <TableCell>
                             <Badge
                               variant="outline"
-                              className={`border-0 ${
-                                model.accuracy >= 90
-                                  ? "bg-emerald-500/20 text-emerald-400"
-                                  : model.accuracy >= 80
-                                    ? "bg-blue-500/20 text-blue-400"
-                                    : "bg-amber-500/20 text-amber-400"
-                              }`}
+                              className={`border-0 ${model.accuracy >= 90
+                                ? "bg-emerald-500/20 text-emerald-400"
+                                : model.accuracy >= 80
+                                  ? "bg-blue-500/20 text-blue-400"
+                                  : "bg-amber-500/20 text-amber-400"
+                                }`}
                             >
                               {model.accuracy}%
                             </Badge>
