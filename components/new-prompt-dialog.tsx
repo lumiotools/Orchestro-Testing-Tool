@@ -45,13 +45,7 @@ const categories = [
   "Service adjustments",
   "Accessorials",
   "ePLD",
-]
-
-const existingPrompts = [
-  { id: "eligible-v3", name: "EligibleAccounts-v3", category: "Eligible accounts", accuracy: 87.2 },
-  { id: "tier-v3", name: "Tier-v3", category: "Tier", accuracy: 92.1 },
-  { id: "epld-v2", name: "ePLD-v2", category: "ePLD", accuracy: 94.3 },
-  { id: "accessorials-v3", name: "Accessorials-v3", category: "Accessorials", accuracy: 87.6 },
+  "DIM"
 ]
 
 const promptTemplates = {
@@ -130,12 +124,13 @@ export function NewPromptDialog({ open, onOpenChange }: NewPromptDialogProps) {
     notes: "",
   })
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [existingPrompts, setExistingPrompts] = useState<any[]>([])
   const [validationErrors, setValidationErrors] = useState<string[]>([])
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([])
   const { toast } = useToast()
 
 
-  const generatePromptName = (category: string) => {
+  const generatePromptName = (category: string, carrier: string) => {
     if (!category) return ""
     const categoryKey = category.replace(/\s+/g, "")
     const existingVersions = existingPrompts
@@ -145,14 +140,13 @@ export function NewPromptDialog({ open, onOpenChange }: NewPromptDialogProps) {
         return match ? Number.parseInt(match[1]) : 0
       })
     const nextVersion = Math.max(...existingVersions, 0) + 1
-    return `${categoryKey}-v${nextVersion}`
+    return `${categoryKey}_${carrier}_v${nextVersion}`
   }
 
   const handleCategoryChange = (category: string) => {
     setFormData({
       ...formData,
-      category,
-      name: generatePromptName(category),
+      category
     })
 
     // Generate AI suggestions based on category
@@ -194,11 +188,11 @@ export function NewPromptDialog({ open, onOpenChange }: NewPromptDialogProps) {
 
   const validateForm = () => {
     const errors: string[] = []
-    if (!formData.name.trim()) errors.push("Prompt name is required")
     if (!formData.category) errors.push("Category must be selected")
     if (!formData.creationMethod) errors.push("Creation method must be selected")
     if (!formData.carrier) errors.push("Carrier must be selected")
-
+    const name = generatePromptName(formData.category, formData.carrier)
+    setFormData({ ...formData, name })
     setValidationErrors(errors)
     return errors.length === 0
   }
@@ -371,7 +365,7 @@ export function NewPromptDialog({ open, onOpenChange }: NewPromptDialogProps) {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="category" className="text-white">
                         Category *
@@ -388,18 +382,6 @@ export function NewPromptDialog({ open, onOpenChange }: NewPromptDialogProps) {
                           ))}
                         </SelectContent>
                       </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="name" className="text-white">
-                        Prompt Name *
-                      </Label>
-                      <Input
-                        id="name"
-                        value={formData.name}
-                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                        placeholder="e.g., EligibleAccounts-v4"
-                        className="bg-white/5 border-white/10 text-white placeholder:text-gray-500"
-                      />
                     </div>
                   </div>
                   <div className="space-y-2">

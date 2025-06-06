@@ -7,13 +7,64 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider"
 import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
-import { Play, RotateCcw, Download, Zap, Brain, Globe, Sparkles, Cpu } from "lucide-react"
+import { Play, RotateCcw, Download, Upload, Zap, Brain, Globe, Sparkles, Cpu, FileJson, Key, AlertCircle } from "lucide-react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { ModelSelector, availableModels } from "@/components/model-selector"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
 
 const API_BASE_URL = "http://localhost:8081/api/v1"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { compareJsonFiles } from "@/lib/compare-json"
+import { TableCategoryMetrics } from "@/components/table-category-metrics"
+import {
+  loadGroundTruthContract,
+  getAvailableContracts,
+  validateGroundTruthContract,
+  type GroundTruthContract,
+  type ContractOption
+} from "@/lib/ground-truth-loader"
+
+interface TestResult {
+  accuracy: number
+  totalContracts: number
+  correctExtractions: number
+  incorrectExtractions: number
+  avgConfidence: number
+  model: string
+  category: string
+  prompt: string
+  details: ContractCategoryResult[]
+}
+
+interface ContractCategoryResult {
+  contractId: string
+  contractName: string
+  similarityScore: number
+  status: 'excellent' | 'good' | 'fair' | 'poor'
+  totalRows: number
+  correctRows: number
+  missingRows: number
+  extraRows: number
+  issues: string[]
+  extractedData: any[]
+  groundTruthData: any[]
+}
+
+// Remove old interface - using GroundTruthContract from loader instead
+
+const CATEGORY_DISPLAY_NAMES: Record<string, string> = {
+  'eligible_accounts': 'Eligible Accounts',
+  'incentive_base_discount': 'Incentive Base Discounts',
+  'tier_discount': 'Tier Discounts',
+  'grace_earn_discount': 'Grace Earn Discounts',
+  'minimum_adjustment': 'Minimum Adjustments',
+  'service_adjustment': 'Service Adjustments',
+  'accessorials': 'Accessorials',
+  'electronic_pld': 'Electronic PLD'
+}
 
 export function AccuracyTester() {
   const [category, setCategory] = useState("select")
@@ -22,18 +73,17 @@ export function AccuracyTester() {
   const [groundTruth, setGroundTruth] = useState<any>([])
   const [selectedPrompt, setSelectedPrompt] = useState<any>(null)
   const [selectedContract, setSelectedContract] = useState<any>(null)
+  const [selectedContractVersion, setSelectedContractVersion] = useState<any>(null)
   const [selectedGroundTruth, setSelectedGroundTruth] = useState<any>(null)
+  const [selectedGroundTruthVersion, setSelectedGroundTruthVersion] = useState<any>(null)
   const [selectedPrompts, setSelectedPrompts] = useState<any>({})
-  const [sampleSize, setSampleSize] = useState(50)
   const [isRunning, setIsRunning] = useState(false)
-  const [progress, setProgress] = useState(0)
-  const [results, setResults] = useState<any>(null)
+  const [results, setResults] = useState<TestResult | null>(null)
   const [selectedModels, setSelectedModels] = useState(["gpt-4o", "claude-3-5-sonnet", "gemini-2.0-flash"])
   const [primaryModel, setPrimaryModel] = useState("gpt-4o")
   const [testMode, setTestMode] = useState<"single" | "comparison">("single")
   const [loading, setLoading] = useState(false)
   const [isContractLoading, setIsContractLoading] = useState(false)
-  const [isGroundTruthLoading, setIsGroundTruthLoading] = useState(false)
   const { toast } = useToast()
 
   const handleRunTest = async () => {
@@ -43,19 +93,21 @@ export function AccuracyTester() {
       contract_id: selectedContract,
       ground_truth_id: selectedGroundTruth,
       save_results: false,
-      contract_file_source: contracts.find((contract: any) => contract.contract_id === selectedContract)?.contract_file_url,
-      contract_name: contracts.find((contract: any) => contract.contract_id === selectedContract)?.contract_file_name
+      contract_name: contracts.find((contract: any) => contract.contract_id === selectedContract)?.contract_file_name,
+      version_id: selectedContractVersion,
+      ground_truth_version_id: selectedGroundTruthVersion,
     };
     try {
-      const response = await fetch(`${API_BASE_URL}/prompt/prompts/test`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(data),
-      });
-      const responseData = await response.json();
-      console.log("🚀 => responseData:", responseData);
+      console.log("🚀 => data:", data);
+      // const response = await fetch(`${API_BASE_URL}/prompt/prompts/test`, {
+      //   method: "POST",
+      //   headers: {
+      //     "Content-Type": "application/json",
+      //   },
+      //   body: JSON.stringify(data),
+      // });
+      // const responseData = await response.json();
+      // console.log("🚀 => responseData:", responseData);
     } catch (error) {
       toast({
         title: "Error fetching prompts",
@@ -64,23 +116,6 @@ export function AccuracyTester() {
       })
     } finally {
       setIsRunning(false)
-    }
-  }
-
-  const getProviderIcon = (provider: string) => {
-    switch (provider) {
-      case "OpenAI":
-        return <Zap className="h-4 w-4" />
-      case "Anthropic":
-        return <Brain className="h-4 w-4" />
-      case "Google":
-        return <Globe className="h-4 w-4" />
-      case "xAI":
-        return <Sparkles className="h-4 w-4" />
-      case "DeepSeek":
-        return <Cpu className="h-4 w-4" />
-      default:
-        return <Cpu className="h-4 w-4" />
     }
   }
 
@@ -123,12 +158,9 @@ export function AccuracyTester() {
         },
       })
       const data = await response.json()
-      const nonGroundTruthContracts = data.data.contracts.filter((contract: any) => !contract.ground_truth)
-      console.log("🚀 => nonGroundTruthContracts:", nonGroundTruthContracts);
+      const nonGroundTruthContracts = data.data.contracts.filter((contract: any) => !contract.ground_truth && contract.status === "Active")
       setContracts(nonGroundTruthContracts)
       const groundTruthContracts = data.data.contracts.filter((contract: any) => contract.ground_truth)
-      console.log("🚀 => data.data.contracts:", data.data.contracts);
-      console.log("🚀 => groundTruthContracts:", groundTruthContracts);
       setGroundTruth(groundTruthContracts)
     } catch (error) {
       toast({
@@ -171,6 +203,8 @@ export function AccuracyTester() {
 
   return (
     <div className="space-y-6">
+
+
       {/* Test Configuration */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card className="glass-card border-0">
@@ -207,9 +241,6 @@ export function AccuracyTester() {
                       <div className="text-white px-4 py-2">Loading...</div>
                     ) : (
                       <>
-                        <SelectItem value="select" className="text-white hover:bg-white/10">
-                          Select Category
-                        </SelectItem>
                         {prompt && Object.keys(prompt).map((category: any) => (
                           <SelectItem key={category} value={category} className="text-white hover:bg-white/10">
                             {category}
@@ -269,7 +300,10 @@ export function AccuracyTester() {
 
             <div className="space-y-2">
               <label className="text-sm font-medium text-white">Choose Contracts</label>
-              <Select value={selectedContract} onValueChange={setSelectedContract}>
+              <Select value={selectedContract} onValueChange={(value) => {
+                setSelectedContract(value)
+                setSelectedContractVersion(contracts.find((contract: any) => contract.contract_id === value)?.current_version_id)
+              }}>
                 <SelectTrigger className="bg-white/5 border-white/10 text-white">
                   <SelectValue />
                 </SelectTrigger>
@@ -298,12 +332,15 @@ export function AccuracyTester() {
 
             <div className="space-y-2">
               <label className="text-sm font-medium text-white">Choose Ground Truth</label>
-              <Select value={selectedGroundTruth} onValueChange={setSelectedGroundTruth}>
+              <Select value={selectedGroundTruth} onValueChange={(value) => {
+                setSelectedGroundTruth(value)
+                setSelectedGroundTruthVersion(groundTruth.find((groundTruthItem: any) => groundTruthItem.contract_id === value)?.current_version_id)
+              }}>
                 <SelectTrigger className="bg-white/5 border-white/10 text-white">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="bg-gray-900 border-white/20">
-                  {isGroundTruthLoading ? (
+                  {isContractLoading ? (
                     <div className="text-white px-4 py-2">Loading...</div>
                   ) : (
                     <>
@@ -340,15 +377,15 @@ export function AccuracyTester() {
               </Button>
             </div>
 
-            {isRunning && (
+            {/* {isRunning && (
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
-                  <span className="text-white">Testing in progress...</span>
-                  <span className="text-emerald-400">{progress}%</span>
+                  <span className="text-white">Running accuracy test...</span>
+                  <span className="text-emerald-400">{progress.toFixed(0)}%</span>
                 </div>
                 <Progress value={progress} className="bg-gray-800" />
               </div>
-            )}
+            )} */}
           </CardContent>
         </Card>
 
@@ -469,177 +506,137 @@ export function AccuracyTester() {
         </Card>
       )}
 
+
       {/* Results */}
       {results && (
         <div className="space-y-6">
-          {testMode === "single" ? (
-            // Single Model Results
-            <>
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <Card className="glass-card border-0">
-                  <CardContent className="pt-6">
-                    <div className="text-center">
-                      <div className="text-2xl font-bold text-emerald-400">{results.accuracy}%</div>
-                      <p className="text-sm text-gray-400">Overall Accuracy</p>
-                    </div>
-                  </CardContent>
-                </Card>
-                <Card className="glass-card border-0">
-                  <CardContent className="pt-6">
-                    <div className="text-center">
-                      <div className="text-2xl font-bold text-white">{results.totalContracts}</div>
-                      <p className="text-sm text-gray-400">Total Contracts</p>
-                    </div>
-                  </CardContent>
-                </Card>
-                <Card className="glass-card border-0">
-                  <CardContent className="pt-6">
-                    <div className="text-center">
-                      <div className="text-2xl font-bold text-emerald-400">{results.correctExtractions}</div>
-                      <p className="text-sm text-gray-400">Correct</p>
-                    </div>
-                  </CardContent>
-                </Card>
-                <Card className="glass-card border-0">
-                  <CardContent className="pt-6">
-                    <div className="text-center">
-                      <div className="text-2xl font-bold text-white">{(results.avgConfidence * 100).toFixed(1)}%</div>
-                      <p className="text-sm text-gray-400">Avg Confidence</p>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              <Card className="glass-card border-0">
-                <CardHeader className="border-b border-white/10">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <CardTitle className="text-lg text-white">Detailed Results</CardTitle>
-                      <CardDescription className="text-gray-400">
-                        Individual contract extraction results
-                      </CardDescription>
-                    </div>
-                    <Button variant="outline" size="sm" className="border-white/20 text-white hover:bg-white/10">
-                      <Download className="h-4 w-4 mr-2" />
-                      Export Results
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent className="pt-6">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="border-white/10">
-                        <TableHead className="text-gray-400">Contract ID</TableHead>
-                        <TableHead className="text-gray-400">Status</TableHead>
-                        <TableHead className="text-gray-400">Extracted Value</TableHead>
-                        <TableHead className="text-gray-400">Expected Value</TableHead>
-                        <TableHead className="text-gray-400">Confidence</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {results.details.map((detail: any, index: number) => (
-                        <TableRow key={index} className="border-white/10">
-                          <TableCell className="font-medium text-white">{detail.contractId}</TableCell>
-                          <TableCell>
-                            <Badge
-                              variant="outline"
-                              className={`border-0 ${detail.correct ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/20 text-red-400"
-                                }`}
-                            >
-                              {detail.correct ? "Correct" : "Incorrect"}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="font-mono text-white">{detail.extractedValue}</TableCell>
-                          <TableCell className="font-mono text-gray-400">{detail.expectedValue}</TableCell>
-                          <TableCell className="text-white">{(detail.confidence * 100).toFixed(1)}%</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-            </>
-          ) : (
-            // Model Comparison Results
+          {/* Overall Metrics */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <Card className="glass-card border-0">
-              <CardHeader className="border-b border-white/10">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="text-lg text-white">Model Comparison Results</CardTitle>
-                    <CardDescription className="text-gray-400">
-                      Performance comparison across selected models
-                    </CardDescription>
-                  </div>
-                  <Button variant="outline" size="sm" className="border-white/20 text-white hover:bg-white/10">
-                    <Download className="h-4 w-4 mr-2" />
-                    Export Comparison
-                  </Button>
-                </div>
-              </CardHeader>
               <CardContent className="pt-6">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="border-white/10">
-                      <TableHead className="text-gray-400">Model</TableHead>
-                      <TableHead className="text-gray-400">Accuracy</TableHead>
-                      <TableHead className="text-gray-400">Avg Confidence</TableHead>
-                      <TableHead className="text-gray-400">Response Time</TableHead>
-                      <TableHead className="text-gray-400">Cost</TableHead>
-                      <TableHead className="text-gray-400">Correct/Incorrect</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {results.modelComparison
-                      .sort((a: any, b: any) => b.accuracy - a.accuracy)
-                      .map((model: any, index: number) => (
-                        <TableRow key={model.modelId} className="border-white/10">
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              {getProviderIcon(model.provider)}
-                              <div>
-                                <div className="font-medium text-white">{model.modelName}</div>
-                                <div className="text-xs text-gray-400">{model.provider}</div>
-                              </div>
-                              {index === 0 && (
-                                <Badge
-                                  variant="outline"
-                                  className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-xs"
-                                >
-                                  Best
-                                </Badge>
-                              )}
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <Badge
-                              variant="outline"
-                              className={`border-0 ${model.accuracy >= 90
-                                ? "bg-emerald-500/20 text-emerald-400"
-                                : model.accuracy >= 80
-                                  ? "bg-blue-500/20 text-blue-400"
-                                  : "bg-amber-500/20 text-amber-400"
-                                }`}
-                            >
-                              {model.accuracy}%
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-white">{(model.avgConfidence * 100).toFixed(1)}%</TableCell>
-                          <TableCell className="text-white">{model.avgResponseTime.toFixed(1)}s</TableCell>
-                          <TableCell className="text-white">${model.cost.toFixed(4)}</TableCell>
-                          <TableCell>
-                            <div className="flex gap-2">
-                              <span className="text-emerald-400">{model.correctExtractions}</span>
-                              <span className="text-gray-400">/</span>
-                              <span className="text-red-400">{model.incorrectExtractions}</span>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                  </TableBody>
-                </Table>
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-emerald-400">{results.accuracy.toFixed(1)}%</div>
+                  <p className="text-sm text-gray-400">Overall Accuracy</p>
+                </div>
               </CardContent>
             </Card>
-          )}
+            <Card className="glass-card border-0">
+              <CardContent className="pt-6">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-white">{results.totalContracts}</div>
+                  <p className="text-sm text-gray-400">Total Contracts</p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="glass-card border-0">
+              <CardContent className="pt-6">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-emerald-400">{results.correctExtractions}</div>
+                  <p className="text-sm text-gray-400">Correct</p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="glass-card border-0">
+              <CardContent className="pt-6">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-white">{(results.avgConfidence * 100).toFixed(1)}%</div>
+                  <p className="text-sm text-gray-400">Avg Confidence</p>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Test Summary */}
+          <Card className="glass-card border-0">
+            <CardHeader className="border-b border-white/10">
+              <CardTitle className="text-lg text-white">Test Summary</CardTitle>
+              <CardDescription className="text-gray-400">
+                Category: {CATEGORY_DISPLAY_NAMES[results.category] || results.category} | Prompt: {results.prompt}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="pt-6">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+                <div>
+                  <div className="text-2xl font-bold text-emerald-400">{results.accuracy.toFixed(1)}%</div>
+                  <p className="text-sm text-gray-400">Avg Similarity</p>
+                </div>
+                <div>
+                  <div className="text-2xl font-bold text-white">{results.totalContracts}</div>
+                  <p className="text-sm text-gray-400">Contracts Tested</p>
+                </div>
+                <div>
+                  <div className="text-2xl font-bold text-emerald-400">{results.correctExtractions}</div>
+                  <p className="text-sm text-gray-400">Excellent (≥90%)</p>
+                </div>
+                <div>
+                  <div className="text-2xl font-bold text-amber-400">{results.incorrectExtractions}</div>
+                  <p className="text-sm text-gray-400">Needs Improvement</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Detailed Results */}
+          <Card className="glass-card border-0">
+            <CardHeader className="border-b border-white/10">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-lg text-white">Contract Results</CardTitle>
+                  <CardDescription className="text-gray-400">
+                    {CATEGORY_DISPLAY_NAMES[results.category] || results.category} extraction results by contract
+                  </CardDescription>
+                </div>
+                <Button variant="outline" size="sm" className="border-white/20 text-white hover:bg-white/10">
+                  <Download className="h-4 w-4 mr-2" />
+                  Export Results
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-6">
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-white/10">
+                    <TableHead className="text-gray-400">Contract</TableHead>
+                    <TableHead className="text-gray-400">Status</TableHead>
+                    <TableHead className="text-gray-400">Similarity Score</TableHead>
+                    <TableHead className="text-gray-400">Rows (Correct/Total)</TableHead>
+                    <TableHead className="text-gray-400">Issues</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {results.details.map((detail, index) => (
+                    <TableRow key={index} className="border-white/10">
+                      <TableCell className="font-medium text-white">{detail.contractName}</TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={`border-0 ${detail.status === 'excellent' ? "bg-emerald-500/20 text-emerald-400" :
+                            detail.status === 'good' ? "bg-blue-500/20 text-blue-400" :
+                              detail.status === 'fair' ? "bg-amber-500/20 text-amber-400" :
+                                "bg-red-500/20 text-red-400"
+                            }`}
+                        >
+                          {detail.status.charAt(0).toUpperCase() + detail.status.slice(1)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-white">{detail.similarityScore.toFixed(1)}%</TableCell>
+                      <TableCell className="text-white">{detail.correctRows}/{detail.totalRows}</TableCell>
+                      <TableCell className="text-gray-400 text-sm max-w-48">
+                        {detail.issues.length > 0 ? (
+                          <div className="truncate" title={detail.issues.join(', ')}>
+                            {detail.issues.slice(0, 2).join(', ')}
+                            {detail.issues.length > 2 && '...'}
+                          </div>
+                        ) : (
+                          'None'
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
         </div>
       )}
     </div>

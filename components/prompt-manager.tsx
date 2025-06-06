@@ -65,7 +65,7 @@ interface PromptManagerProps {
 export function PromptManager({ documentType }: PromptManagerProps) {
   const [prompts, setPrompts] = useState<Prompt[]>([])
   const [loading, setLoading] = useState(true)
-  const [selectedCarrier, setSelectedCarrier] = useState("UPS")
+  const [selectedCarrier, setSelectedCarrier] = useState("all")
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set())
@@ -90,7 +90,7 @@ export function PromptManager({ documentType }: PromptManagerProps) {
     try {
       setLoading(true)
       const params = new URLSearchParams()
-      if (selectedCarrier) params.append('carrier', selectedCarrier)
+      if (selectedCarrier !== "all") params.append('carrier', selectedCarrier)
       if (selectedCategory) params.append('category', selectedCategory)
       if (searchTerm) params.append('search', searchTerm)
       
@@ -116,7 +116,8 @@ export function PromptManager({ documentType }: PromptManagerProps) {
       const response = await fetch(`${API_BASE_URL}/prompt/prompts/categories`)
       if (response.ok) {
         const data = await response.json()
-        setCategories(data.categories || [])
+        const uniqueCategories = [...new Set(data.categories || [])] as string[]
+        setCategories(uniqueCategories)
       }
     } catch (error) {
       console.error('Error fetching categories:', error)
@@ -165,26 +166,6 @@ export function PromptManager({ documentType }: PromptManagerProps) {
     }
   }
 
-  // Activate version 1.0 prompts by default
-  const activateDefaultPrompts = async () => {
-    try {
-      const v1Prompts = prompts.filter(p => p.version === "1.0" && p.status !== "active")
-      
-      for (const prompt of v1Prompts) {
-        await fetch(`${API_BASE_URL}/prompt/prompts/${prompt.id}/activate`, {
-          method: 'POST'
-        })
-      }
-      
-      if (v1Prompts.length > 0) {
-        console.log(`Activated ${v1Prompts.length} v1.0 prompts`)
-        fetchPrompts() // Refresh to show updated status
-      }
-    } catch (error) {
-      console.error('Error activating default prompts:', error)
-    }
-  }
-
   useEffect(() => {
     fetchCategories()
     fetchCarriers()
@@ -195,11 +176,6 @@ export function PromptManager({ documentType }: PromptManagerProps) {
     fetchPrompts()
   }, [selectedCarrier, selectedCategory, searchTerm])
 
-  useEffect(() => {
-    if (prompts.length > 0) {
-      activateDefaultPrompts()
-    }
-  }, [prompts.length])
 
   const handleEditPrompt = (prompt: Prompt) => {
     setEditingPrompt(prompt)
@@ -507,6 +483,7 @@ export function PromptManager({ documentType }: PromptManagerProps) {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent className="bg-gray-900 border-white/20">
+                      <SelectItem value="all" className="text-white hover:bg-white/10">All Carriers</SelectItem>
                       {carriers.map((carrier) => (
                         <SelectItem key={carrier} value={carrier} className="text-white hover:bg-white/10">
                           {carrier}
@@ -581,7 +558,7 @@ export function PromptManager({ documentType }: PromptManagerProps) {
                   <TrendingUp className="h-4 w-4 text-emerald-400" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold text-white">{statistics?.avg_accuracy ? `${statistics.avg_accuracy}%` : 'NULL'}</div>
+                  <div className="text-2xl font-bold text-white">{statistics?.avg_accuracy ?? 'NULL'}%</div>
                   <p className="text-xs text-gray-400">
                     Across all prompts
                   </p>
@@ -594,7 +571,7 @@ export function PromptManager({ documentType }: PromptManagerProps) {
                   <Clock className="h-4 w-4 text-emerald-400" />
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold text-white">{statistics?.total_tests || 'NULL'}</div>
+                  <div className="text-2xl font-bold text-white">{statistics?.total_tests ?? 'NULL'}</div>
                   <p className="text-xs text-gray-400">
                     Total executions
                   </p>

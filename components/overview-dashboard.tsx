@@ -384,13 +384,12 @@ export function OverviewDashboard({ documentType }: OverviewDashboardProps) {
                       <div className="text-3xl font-bold text-white">{category.accuracy}%</div>
                       <Badge
                         variant="outline"
-                        className={`border-0 ${
-                          category.accuracy >= 90
+                        className={`border-0 ${category.accuracy >= 90
                             ? "bg-emerald-500/20 text-emerald-400"
                             : category.accuracy >= 80
                               ? "bg-blue-500/20 text-blue-400"
                               : "bg-amber-500/20 text-amber-400"
-                        }`}
+                          }`}
                       >
                         {statusBadge.text}
                       </Badge>
@@ -409,13 +408,12 @@ export function OverviewDashboard({ documentType }: OverviewDashboardProps) {
 
                     <div className="w-full bg-gray-800 rounded-full h-2 overflow-hidden">
                       <div
-                        className={`h-2 rounded-full transition-all duration-500 ${
-                          category.accuracy >= 90
+                        className={`h-2 rounded-full transition-all duration-500 ${category.accuracy >= 90
                             ? "bg-gradient-to-r from-emerald-500 to-emerald-400"
                             : category.accuracy >= 80
                               ? "bg-gradient-to-r from-blue-500 to-blue-400"
                               : "bg-gradient-to-r from-amber-500 to-amber-400"
-                        }`}
+                          }`}
                         style={{ width: `${category.accuracy}%` }}
                       />
                     </div>
