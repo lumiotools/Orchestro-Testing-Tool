@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -11,17 +11,20 @@ import { Play, RotateCcw, Download, Upload, Zap, Brain, Globe, Sparkles, Cpu, Fi
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { ModelSelector, availableModels } from "@/components/model-selector"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useToast } from "@/hooks/use-toast"
+
+const API_BASE_URL = "http://localhost:8081/api/v1"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { compareJsonFiles } from "@/lib/compare-json"
 import { TableCategoryMetrics } from "@/components/table-category-metrics"
-import { 
-  loadGroundTruthContract, 
-  getAvailableContracts, 
+import {
+  loadGroundTruthContract,
+  getAvailableContracts,
   validateGroundTruthContract,
   type GroundTruthContract,
-  type ContractOption 
+  type ContractOption
 } from "@/lib/ground-truth-loader"
 
 interface TestResult {
@@ -64,388 +67,139 @@ const CATEGORY_DISPLAY_NAMES: Record<string, string> = {
 }
 
 export function AccuracyTester() {
-  const [category, setCategory] = useState("all")
-  const [prompt, setPrompt] = useState("eligible-v1")
-  const [sampleSize, setSampleSize] = useState(50)
+  const [category, setCategory] = useState("select")
+  const [prompt, setPrompt] = useState<any>(null)
+  const [contracts, setContracts] = useState<any>([])
+  const [groundTruth, setGroundTruth] = useState<any>([])
+  const [selectedPrompt, setSelectedPrompt] = useState<any>(null)
+  const [selectedContract, setSelectedContract] = useState<any>(null)
+  const [selectedContractVersion, setSelectedContractVersion] = useState<any>(null)
+  const [selectedGroundTruth, setSelectedGroundTruth] = useState<any>(null)
+  const [selectedGroundTruthVersion, setSelectedGroundTruthVersion] = useState<any>(null)
+  const [selectedPrompts, setSelectedPrompts] = useState<any>({})
   const [isRunning, setIsRunning] = useState(false)
-  const [progress, setProgress] = useState(0)
   const [results, setResults] = useState<TestResult | null>(null)
   const [selectedModels, setSelectedModels] = useState(["gpt-4o", "claude-3-5-sonnet", "gemini-2.0-flash"])
   const [primaryModel, setPrimaryModel] = useState("gpt-4o")
   const [testMode, setTestMode] = useState<"single" | "comparison">("single")
-
-  // API Testing state
-  const [groundTruthFile, setGroundTruthFile] = useState<File | null>(null)
-  const [groundTruthData, setGroundTruthData] = useState<any>(null)
-  const [apiData, setApiData] = useState<any>(null)
-  const [contractId, setContractId] = useState("")
-  const [versionId, setVersionId] = useState("")
-  const [authToken, setAuthToken] = useState("")
-  const [isApiLoading, setIsApiLoading] = useState(false)
-  const [apiValidationError, setApiValidationError] = useState<string | null>(null)
-  const [apiUrl, setApiUrl] = useState("http://localhost:8080/")
-  const [apiResponse, setApiResponse] = useState<string | null>(null)
-  
-  // API Comparison state
-  const [comparing, setComparing] = useState(false)
-  const [apiProgress, setApiProgress] = useState(0)
-  const [comparisonResult, setComparisonResult] = useState<any>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [warnings, setWarnings] = useState<string[]>([])
-  const [activeTab, setActiveTab] = useState<"tables">("tables")
-
-  // Initialize authToken from sessionStorage on component mount
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const token = sessionStorage.getItem("auth_token");
-      if (token) {
-        setAuthToken(token);
-      }
-    }
-  }, []);
-
-  // Check if all API fields are filled
-  const areApiFieldsValid = contractId.trim() !== "" && versionId.trim() !== ""
-
-  const runCategoryAccuracyTest = async (): Promise<TestResult> => {
-    const availableContracts = getAvailableContracts()
-    const contractResults: ContractCategoryResult[] = []
-    
-    // Load all ground truth contracts and test the selected category
-    for (let i = 0; i < availableContracts.length; i++) {
-      const contract = availableContracts[i]
-      setProgress((i / availableContracts.length) * 80)
-      
-      try {
-        // Load ground truth contract
-        const groundTruthContract = await loadGroundTruthContract(contract.value)
-        if (!groundTruthContract || !validateGroundTruthContract(groundTruthContract)) {
-          console.warn(`Failed to load ground truth for ${contract.value}`)
-          continue
-        }
-
-        // Get ground truth data for the selected category
-        const groundTruthCategoryData = groundTruthContract.tables[category]?.tableData?.rows || []
-        
-        // Simulate extraction using the selected prompt (with some variation based on prompt version)
-        const extractedCategoryData = simulateExtraction(groundTruthCategoryData, prompt, category)
-        
-        // Create a mock extracted contract structure for comparison
-        const mockExtractedContract = {
-          contract_id: groundTruthContract.contract_id,
-          tables: {
-            [category]: {
-              tableData: {
-                rows: extractedCategoryData
-              }
-            }
-          }
-        }
-
-        // Use the actual comparison function from compare-json
-        const comparisonResult = await compareJsonFiles(
-          groundTruthContract,
-          mockExtractedContract,
-          () => {} // Progress callback for individual comparison
-        )
-
-        // Extract category-specific results
-        const categoryResult = comparisonResult.tableCategories?.[category]
-        if (categoryResult) {
-          const similarityScore = categoryResult.similarityScore || 0
-          const status = getStatusFromScore(similarityScore)
-          
-          contractResults.push({
-            contractId: contract.value,
-            contractName: contract.label,
-            similarityScore,
-            status,
-            totalRows: categoryResult.expectedRows || groundTruthCategoryData.length,
-            correctRows: (categoryResult.expectedRows || groundTruthCategoryData.length) - (categoryResult.missingRows || 0),
-            missingRows: categoryResult.missingRows || 0,
-            extraRows: categoryResult.extraRows || 0,
-            issues: [
-              ...(categoryResult.missingRows > 0 ? [`${categoryResult.missingRows} missing rows`] : []),
-              ...(categoryResult.extraRows > 0 ? [`${categoryResult.extraRows} extra rows`] : []),
-              ...(categoryResult.lowSimilarityDetails?.length > 0 ? [`${categoryResult.lowSimilarityDetails.length} low similarity matches`] : [])
-            ],
-            extractedData: extractedCategoryData,
-            groundTruthData: groundTruthCategoryData
-          })
-        }
-
-      } catch (error) {
-        console.error(`Error processing contract ${contract.value}:`, error)
-        // Add error result
-        contractResults.push({
-          contractId: contract.value,
-          contractName: contract.label,
-          similarityScore: 0,
-          status: 'poor',
-          totalRows: 0,
-          correctRows: 0,
-          missingRows: 0,
-          extraRows: 0,
-          issues: ['Processing error'],
-          extractedData: [],
-          groundTruthData: []
-        })
-      }
-
-      // Small delay to show progress
-      await new Promise(resolve => setTimeout(resolve, 100))
-    }
-
-    setProgress(100)
-
-    // Calculate overall statistics
-    const totalContracts = contractResults.length
-    const avgSimilarity = contractResults.reduce((sum, r) => sum + r.similarityScore, 0) / totalContracts
-    const excellentCount = contractResults.filter(r => r.status === 'excellent').length
-    
-    return {
-      accuracy: avgSimilarity,
-      totalContracts,
-      correctExtractions: excellentCount,
-      incorrectExtractions: totalContracts - excellentCount,
-      avgConfidence: avgSimilarity / 100,
-      model: primaryModel,
-      category,
-      prompt,
-      details: contractResults
-    }
-  }
-
-  // Helper function to simulate extraction with prompt variations
-  const simulateExtraction = (groundTruthData: any[], promptVersion: string, categoryType: string): any[] => {
-    // Simulate different accuracy levels based on prompt version
-    const promptAccuracy = getPromptAccuracy(promptVersion)
-    
-    return groundTruthData.map(row => {
-      // Simulate extraction errors based on prompt accuracy
-      const shouldHaveError = Math.random() > promptAccuracy
-      
-      if (!shouldHaveError) {
-        return { ...row } // Perfect extraction
-      }
-      
-      // Introduce realistic errors based on category type
-      return introduceExtractionErrors(row, categoryType)
-    }).filter(() => Math.random() > 0.05) // Simulate occasional missing rows
-  }
-
-  // Helper function to get prompt accuracy
-  const getPromptAccuracy = (promptVersion: string): number => {
-    const accuracyMap: Record<string, number> = {
-      'eligible-v1': 0.852,
-      'eligible-v2': 0.887,
-      'eligible-v3': 0.892
-    }
-    return accuracyMap[promptVersion] || 0.85
-  }
-
-  // Helper function to introduce realistic extraction errors
-  const introduceExtractionErrors = (row: any, categoryType: string): any => {
-    const errorRow = { ...row }
-    
-    // Introduce category-specific errors
-    switch (categoryType) {
-      case 'eligible_accounts':
-        if (Math.random() < 0.3) errorRow.name = errorRow.name?.replace(/Corp|Inc|LLC/g, '') // Remove company suffixes
-        if (Math.random() < 0.2) errorRow.zip = errorRow.zip?.slice(0, -1) + '0' // Change last digit of zip
-        break
-      case 'incentive_base_discount':
-        if (Math.random() < 0.3) errorRow.discount = (parseFloat(errorRow.discount) + Math.random() * 2 - 1).toFixed(2) + '%'
-        if (Math.random() < 0.2) errorRow.service = errorRow.service?.replace(/UPS|FedEx/g, '') // Remove carrier name
-        break
-      case 'accessorials':
-        if (Math.random() < 0.3) errorRow.discount = (parseFloat(errorRow.discount) + Math.random() * 5 - 2.5).toFixed(2) + '%'
-        break
-      default:
-        // Generic errors for other categories
-        Object.keys(errorRow).forEach(key => {
-          if (typeof errorRow[key] === 'string' && errorRow[key].includes('%') && Math.random() < 0.2) {
-            errorRow[key] = (parseFloat(errorRow[key]) + Math.random() * 2 - 1).toFixed(2) + '%'
-          }
-        })
-    }
-    
-    return errorRow
-  }
-
-  // Helper function to determine status from similarity score
-  const getStatusFromScore = (score: number): 'excellent' | 'good' | 'fair' | 'poor' => {
-    if (score >= 90) return 'excellent'
-    if (score >= 80) return 'good'
-    if (score >= 70) return 'fair'
-    return 'poor'
-  }
+  const [loading, setLoading] = useState(false)
+  const [isContractLoading, setIsContractLoading] = useState(false)
+  const { toast } = useToast()
 
   const handleRunTest = async () => {
     setIsRunning(true)
-    setProgress(0)
-    setResults(null)
-
+    const data = {
+      prompt_ids: Object.values(selectedPrompts),
+      contract_id: selectedContract,
+      ground_truth_id: selectedGroundTruth,
+      save_results: false,
+      contract_name: contracts.find((contract: any) => contract.contract_id === selectedContract)?.contract_file_name,
+      version_id: selectedContractVersion,
+      ground_truth_version_id: selectedGroundTruthVersion,
+    };
     try {
-      const result = await runCategoryAccuracyTest()
-      setResults(result)
+      console.log("🚀 => data:", data);
+      // const response = await fetch(`${API_BASE_URL}/prompt/prompts/test`, {
+      //   method: "POST",
+      //   headers: {
+      //     "Content-Type": "application/json",
+      //   },
+      //   body: JSON.stringify(data),
+      // });
+      // const responseData = await response.json();
+      // console.log("🚀 => responseData:", responseData);
     } catch (error) {
-      console.error("Error running test:", error)
+      toast({
+        title: "Error fetching prompts",
+        description: "Please try again later",
+        variant: "destructive",
+      })
     } finally {
       setIsRunning(false)
-      setProgress(0)
     }
   }
 
-  // API Testing Functions
-  const fetchContractData = async () => {
-    if (!areApiFieldsValid) {
-      setApiValidationError("Contract ID and Version ID are required")
-      return
-    }
-
-    setApiValidationError(null)
-    setIsApiLoading(true)
-    setError(null)
-    setApiResponse(null)
-    setComparisonResult(null)
-
+  const getPrompts = async () => {
     try {
-      const response = await fetch(`${apiUrl}api/v1/contract/${contractId}/version/${versionId}`, {
+      setLoading(true)
+      const response = await fetch(`${API_BASE_URL}/prompt/prompts`,
+        {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      )
+      const data = await response.json()
+      const segregatedPrompts = segregatePrompts(data.prompts)
+      console.log(segregatedPrompts)
+      setPrompt(segregatedPrompts)
+      setCategory(Object.keys(segregatedPrompts)[0])
+      setSelectedPrompt(segregatedPrompts[Object.keys(segregatedPrompts)[0] as keyof typeof segregatedPrompts][0])
+    } catch (error) {
+      toast({
+        title: "Error fetching prompts",
+        description: "Please try again later",
+        variant: "destructive",
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const getContracts = async () => {
+    try {
+      setIsContractLoading(true)
+      const response = await fetch(`${API_BASE_URL}/contract/list?timestamp=${new Date().getTime()}`, {
         method: "GET",
         headers: {
           "Content-Type": "application/json",
+          "Authorization": localStorage.getItem("accessToken") || "",
         },
       })
-
-      if (response.status === 401) {
-        if (typeof window !== 'undefined') {
-          sessionStorage.removeItem("auth_token");
-        }
-        throw new Error("Authentication failed. Please re-enter your authentication token.")
-      }
-
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status} ${response.statusText}`)
-      }
-
-      if (typeof window !== 'undefined') {
-        sessionStorage.setItem("auth_token", authToken);
-      }
-
       const data = await response.json()
-      setApiResponse(JSON.stringify(data, null, 2))
-
-      // Extract only the tables data for comparison
-      const extractedData = {
-        contract_id: data.data.contract_id,
-        current_version_id: data.data.current_version_id,
-        version_id: data.data.version_id,
-        carrier: data.data.carrier,
-        shipper: data.data.shipper,
-        effective_date: data.data.effective_date,
-        end_date: data.data.end_date,
-        status: data.data.status,
-        tables: data.data.tables
-      }
-
-      setApiData(extractedData)
-    } catch (err: any) {
-      setError(`Error fetching contract data: ${err.message}`)
+      const nonGroundTruthContracts = data.data.contracts.filter((contract: any) => !contract.ground_truth && contract.status === "Active")
+      setContracts(nonGroundTruthContracts)
+      const groundTruthContracts = data.data.contracts.filter((contract: any) => contract.ground_truth)
+      setGroundTruth(groundTruthContracts)
+    } catch (error) {
+      toast({
+        title: "Error fetching contracts",
+        description: "Please try again later",
+        variant: "destructive",
+      })
     } finally {
-      setIsApiLoading(false)
+      setIsContractLoading(false)
     }
   }
 
-  const handleGroundTruthUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
+  const segregatePrompts = (prompts: any) => {
+    const eligiblePrompts = prompts.filter((prompt: any) => prompt.category === "Eligible_accounts")
+    const incentivePrompts = prompts.filter((prompt: any) => prompt.category === "Incentive_base_discounts")
+    const tierPrompts = prompts.filter((prompt: any) => prompt.category === "Tier")
+    const minimumsPrompts = prompts.filter((prompt: any) => prompt.category === "Minimums")
+    const servicePrompts = prompts.filter((prompt: any) => prompt.category === "Service_adjustments")
+    const accessorialsPrompts = prompts.filter((prompt: any) => prompt.category === "Accessorials")
+    const ePLDPrompts = prompts.filter((prompt: any) => prompt.category === "ePLD")
+    const dimPrompts = prompts.filter((prompt: any) => prompt.category === "DIM")
 
-    setGroundTruthFile(file)
-    setGroundTruthData(null)
-    setComparisonResult(null)
-
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      try {
-        const json = JSON.parse(e.target?.result as string)
-        setGroundTruthData(json)
-        setError(null)
-      } catch (err) {
-        setError(`Invalid JSON file: ${file.name}`)
-        setGroundTruthFile(null)
-        setGroundTruthData(null)
-      }
-    }
-    reader.readAsText(file)
-  }
-
-  const compareFiles = async () => {
-    if (!groundTruthData || !apiData) {
-      setError("Please upload ground truth file and fetch API data first")
-      return
-    }
-
-    setComparing(true)
-    setApiProgress(0)
-    setComparisonResult(null)
-    setError(null)
-    setWarnings([])
-
-    try {
-      // groundTruthData is the ground truth/actual, apiData is the extracted/expected
-      const result = await compareJsonFiles(
-        groundTruthData, 
-        apiData, 
-        (progressValue) => {
-          setApiProgress(progressValue)
-        }
-      )
-
-      setComparisonResult(result)
-
-      if (result.warnings && result.warnings.length > 0) {
-        setWarnings(result.warnings)
-      }
-    } catch (err: any) {
-      setError(`Error comparing files: ${err.message}`)
-      setComparisonResult(null)
-    } finally {
-      setComparing(false)
+    return {
+      "Eligible Accounts": eligiblePrompts,
+      "Incentive Base Discounts": incentivePrompts,
+      "Tier": tierPrompts,
+      "Minimums": minimumsPrompts,
+      "Service Adjustments": servicePrompts,
+      "Accessorials": accessorialsPrompts,
+      "ePLD": ePLDPrompts,
+      "DIM": dimPrompts,
     }
   }
 
-  const formatTimestamp = () => {
-    const now = new Date()
-    return now.toISOString().replace("T", " ").substring(0, 19)
-  }
 
-  const hasTableCategories =
-    comparisonResult && comparisonResult.tableCategories && Object.keys(comparisonResult.tableCategories).length > 0
-
-  const displayMessage =
-    comparisonResult?.message && comparisonResult.message.includes("Tables missing in one or both JSON files")
-      ? "Comparison completed successfully"
-      : comparisonResult?.message
-
-  const canCompare = groundTruthData && apiData
-
-  const getProviderIcon = (provider: string) => {
-    switch (provider) {
-      case "OpenAI":
-        return <Zap className="h-4 w-4" />
-      case "Anthropic":
-        return <Brain className="h-4 w-4" />
-      case "Google":
-        return <Globe className="h-4 w-4" />
-      case "xAI":
-        return <Sparkles className="h-4 w-4" />
-      case "DeepSeek":
-        return <Cpu className="h-4 w-4" />
-      default:
-        return <Cpu className="h-4 w-4" />
-    }
-  }
+  useEffect(() => {
+    getPrompts();
+    getContracts();
+  }, [])
 
   return (
     <div className="space-y-6">
@@ -469,73 +223,144 @@ export function AccuracyTester() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium text-white">Category</label>
-                <Select value={category} onValueChange={setCategory}>
+                <Select
+                  value={category}
+                  onValueChange={(value) => {
+                    setCategory(value);
+                    if (prompt && prompt[value] && prompt[value].length > 0) {
+                      setSelectedPrompt(prompt[value][0].id || prompt[value][0].name);
+                      setSelectedPrompts({ ...selectedPrompts, [value]: prompt[value][0].id || prompt[value][0].name })
+                    }
+                  }}
+                >
                   <SelectTrigger className="bg-white/5 border-white/10 text-white">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="bg-gray-900 border-white/20">
-                    <SelectItem value="all" className="text-white hover:bg-white/10">
-                      All Categories
-                    </SelectItem>
-                    <SelectItem value="eligible_accounts" className="text-white hover:bg-white/10">
-                      Eligible accounts
-                    </SelectItem>
-                    <SelectItem value="incentive_base_discount" className="text-white hover:bg-white/10">
-                      Incentive base discounts
-                    </SelectItem>
-                    <SelectItem value="tier_discount" className="text-white hover:bg-white/10">
-                      Tier discounts
-                    </SelectItem>
-                    <SelectItem value="minimum_adjustment" className="text-white hover:bg-white/10">
-                      Minimum adjustments
-                    </SelectItem>
-                    <SelectItem value="service_adjustment" className="text-white hover:bg-white/10">
-                      Service adjustments
-                    </SelectItem>
-                    <SelectItem value="accessorials" className="text-white hover:bg-white/10">
-                      Accessorials
-                    </SelectItem>
-                    <SelectItem value="electronic_pld" className="text-white hover:bg-white/10">
-                      Electronic PLD
-                    </SelectItem>
+                    {loading ? (
+                      <div className="text-white px-4 py-2">Loading...</div>
+                    ) : (
+                      <>
+                        {prompt && Object.keys(prompt).map((category: any) => (
+                          <SelectItem key={category} value={category} className="text-white hover:bg-white/10">
+                            {category}
+                          </SelectItem>
+                        ))}
+                      </>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
 
               <div className="space-y-2">
                 <label className="text-sm font-medium text-white">Prompt</label>
-                <Select value={prompt} onValueChange={setPrompt}>
+                <Select value={selectedPrompt} onValueChange={(value) => {
+                  setSelectedPrompts({ ...selectedPrompts, [category]: value })
+                  setSelectedPrompt(value)
+                }}>
                   <SelectTrigger className="bg-white/5 border-white/10 text-white">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="bg-gray-900 border-white/20">
-                    <SelectItem value="eligible-v1" className="text-white hover:bg-white/10">
-                      EligibleAccounts-v1 (85.2%)
-                    </SelectItem>
-                    <SelectItem value="eligible-v2" className="text-white hover:bg-white/10">
-                      EligibleAccounts-v2 (88.7%)
-                    </SelectItem>
-                    <SelectItem value="eligible-v3" className="text-white hover:bg-white/10">
-                      EligibleAccounts-v3 (89.2%)
-                    </SelectItem>
+                    {loading ? (
+                      <div className="text-white px-4 py-2">Loading...</div>
+                    ) : (
+                      <>
+                        {prompt && prompt[category].map((promptItem: any) => (
+                          <SelectItem
+                            key={promptItem.id || promptItem.name}
+                            value={promptItem.id || promptItem.name}
+                            className="text-white hover:bg-white/10 cursor-pointer transition-colors duration-200"
+                          >
+                            <div className="flex items-center justify-between w-full py-1">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-white truncate">
+                                  {promptItem.name || promptItem.id}
+                                </p>
+                              </div>
+                              <div className="flex-shrink-0 ml-3">
+                                <span
+                                  className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${promptItem.status === "active"
+                                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                                    : "bg-red-500/20 text-red-300 border border-red-500/30"
+                                    }`}
+                                >
+                                  {promptItem.status}
+                                </span>
+                              </div>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
             </div>
 
             <div className="space-y-2">
-              <div className="flex justify-between">
-                <label className="text-sm font-medium text-white">Sample Size</label>
-                <span className="text-sm text-gray-400">{sampleSize} contracts</span>
-              </div>
-              <Slider
-                value={[sampleSize]}
-                min={10}
-                max={100}
-                step={10}
-                onValueChange={(value) => setSampleSize(value[0])}
-                className="[&_[role=slider]]:bg-emerald-500"
-              />
+              <label className="text-sm font-medium text-white">Choose Contracts</label>
+              <Select value={selectedContract} onValueChange={(value) => {
+                setSelectedContract(value)
+                setSelectedContractVersion(contracts.find((contract: any) => contract.contract_id === value)?.current_version_id)
+              }}>
+                <SelectTrigger className="bg-white/5 border-white/10 text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-gray-900 border-white/20">
+                  {isContractLoading ? (
+                    <div className="text-white px-4 py-2">Loading...</div>
+                  ) : (
+                    contracts.length > 0 ? contracts.map((contract: any) => (
+                      <SelectItem
+                        key={contract.contract_id}
+                        value={contract.contract_id}
+                        className="text-white hover:bg-white/10"
+                      >
+                        {contract.contract_file_name} - {contract?.carrier}
+                      </SelectItem>
+                    )) : (
+                      <SelectItem value="no-contracts" className="text-white hover:bg-white/10">
+                        No contracts found
+                      </SelectItem>
+                    )
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-white">Choose Ground Truth</label>
+              <Select value={selectedGroundTruth} onValueChange={(value) => {
+                setSelectedGroundTruth(value)
+                setSelectedGroundTruthVersion(groundTruth.find((groundTruthItem: any) => groundTruthItem.contract_id === value)?.current_version_id)
+              }}>
+                <SelectTrigger className="bg-white/5 border-white/10 text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-gray-900 border-white/20">
+                  {isContractLoading ? (
+                    <div className="text-white px-4 py-2">Loading...</div>
+                  ) : (
+                    <>
+                      {groundTruth.length > 0 ? groundTruth.map((groundTruthItem: any) => (
+                        <SelectItem
+                          key={groundTruthItem.contract_id}
+                          value={groundTruthItem.contract_id}
+                          className="text-white hover:bg-white/10"
+                        >
+                          {groundTruthItem.contract_file_name} - {groundTruthItem?.carrier}
+                        </SelectItem>
+                      )) : (
+                        <SelectItem value="no-ground-truth" className="text-white hover:bg-white/10">
+                          No ground truth found
+                        </SelectItem>
+                      )}
+                    </>
+                  )}
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="flex gap-2">
@@ -552,7 +377,7 @@ export function AccuracyTester() {
               </Button>
             </div>
 
-            {isRunning && (
+            {/* {isRunning && (
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-white">Running accuracy test...</span>
@@ -560,7 +385,7 @@ export function AccuracyTester() {
                 </div>
                 <Progress value={progress} className="bg-gray-800" />
               </div>
-            )}
+            )} */}
           </CardContent>
         </Card>
 
@@ -581,229 +406,106 @@ export function AccuracyTester() {
         </Card>
       </div>
 
-      {/* API Testing Section */}
-      <div className="space-y-6">
-        <div className="flex items-center gap-2 mb-4">
-          <FileJson className="h-5 w-5 text-emerald-400" />
-          <h3 className="text-lg font-semibold text-white">API Testing & Comparison</h3>
-        </div>
-        
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* API Configuration */}
-          <Card className="glass-card border-0">
-            <CardHeader className="border-b border-white/10">
-              <CardTitle className="flex items-center gap-2 text-white">
-                <Key className="h-5 w-5" />
-                API Configuration
-              </CardTitle>
-              <CardDescription className="text-gray-400">
-                Enter your API credentials to fetch contract data
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="pt-6 space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="api-url" className="text-white">API URL</Label>
-                <Input
-                  id="api-url"
-                  placeholder="Enter API URL (e.g., http://localhost:8080/)"
-                  value={apiUrl}
-                  onChange={(e) => setApiUrl(e.target.value)}
-                  className="bg-white/5 border-white/10 text-white"
-                />
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="contract-id" className="text-white">Contract ID</Label>
-                  <Input
-                    id="contract-id"
-                    placeholder="Enter Contract ID"
-                    value={contractId}
-                    onChange={(e) => setContractId(e.target.value)}
-                    className="bg-white/5 border-white/10 text-white"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="version-id" className="text-white">Version ID</Label>
-                  <Input
-                    id="version-id"
-                    placeholder="Enter Version ID"
-                    value={versionId}
-                    onChange={(e) => setVersionId(e.target.value)}
-                    className="bg-white/5 border-white/10 text-white"
-                  />
-                </div>
-              </div>
-              {apiValidationError && (
-                <Alert className="border-red-500/20 bg-red-500/10">
-                  <AlertCircle className="h-4 w-4 text-red-400" />
-                  <AlertDescription className="text-red-400">{apiValidationError}</AlertDescription>
-                </Alert>
-              )}
-              <Button 
-                onClick={fetchContractData} 
-                disabled={!areApiFieldsValid || isApiLoading} 
-                className="w-full bg-emerald-600 hover:bg-emerald-700 border-0"
-              >
-                {isApiLoading ? "Fetching..." : "Fetch Contract Data"}
-              </Button>
-              {apiResponse && (
-                <div className="mt-4">
-                  <h4 className="text-sm font-medium mb-2 text-white">API Response Preview:</h4>
-                  <div className="bg-white/5 rounded-md p-4 max-h-60 overflow-auto border border-white/10">
-                    <pre className="text-xs whitespace-pre-wrap text-gray-300">{apiResponse.substring(0, 500)}...</pre>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Ground Truth File Upload */}
-          <Card className="glass-card border-0">
-            <CardHeader className="border-b border-white/10">
-              <CardTitle className="flex items-center gap-2 text-white">
-                <Upload className="h-5 w-5" />
-                Ground Truth JSON File
-              </CardTitle>
-              <CardDescription className="text-gray-400">
-                Upload your ground truth JSON file for comparison with API data
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="pt-6">
-              <div className="border border-dashed border-white/20 rounded-lg p-8 text-center">
-                <Upload className="h-10 w-10 mx-auto mb-4 text-gray-400" />
-                <p className="mb-4 text-gray-400">Drag and drop or click to upload</p>
-                <input
-                  type="file"
-                  accept=".json"
-                  onChange={handleGroundTruthUpload}
-                  className="hidden"
-                  id="ground-truth-upload"
-                />
-                <Button
-                  variant="outline"
-                  onClick={() => document.getElementById("ground-truth-upload")?.click()}
-                  disabled={comparing || isApiLoading}
-                  className="border-white/20 text-white hover:bg-white/10"
-                >
-                  Select File
-                </Button>
-              </div>
-              {groundTruthFile && (
-                <p className="text-sm text-gray-400 mt-4">
-                  Selected: <span className="text-white">{groundTruthFile.name}</span>
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Error Display */}
-        {error && (
-          <Alert className="border-red-500/20 bg-red-500/10">
-            <AlertCircle className="h-4 w-4 text-red-400" />
-            <AlertDescription className="text-red-400">{error}</AlertDescription>
-          </Alert>
-        )}
-
-        {/* Comparison Results */}
+      {/* Selection Summary */}
+      {Object.keys(selectedPrompts).length > 0 && (
         <Card className="glass-card border-0">
           <CardHeader className="border-b border-white/10">
-            <CardTitle className="flex items-center gap-2 text-white">
-              <FileJson className="h-5 w-5" />
-              Comparison Results
-            </CardTitle>
-            <CardDescription className="text-gray-400">
-              Statistics and accuracy calculation
-            </CardDescription>
+            <CardTitle className="text-lg text-white">Selection Summary</CardTitle>
+            <CardDescription className="text-gray-400">Current test configuration</CardDescription>
           </CardHeader>
           <CardContent className="pt-6">
-            <div className="space-y-6">
-              {/* Files Info */}
-              <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Selected Prompts by Category */}
+              <div className="lg:col-span-2 space-y-4">
                 <div>
-                  <p className="text-gray-400 mb-1">Ground Truth File:</p>
-                  <p className="font-medium text-white">
-                    {groundTruthFile ? groundTruthFile.name : "Not uploaded"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-gray-400 mb-1">API Data:</p>
-                  <p className="font-medium text-white">
-                    {apiData ? `Contract ${contractId} - Version ${versionId}` : "Not fetched"}
-                  </p>
+                  <label className="text-xs font-medium text-gray-400 uppercase tracking-wider">Selected Prompts</label>
+                  <div className="mt-2 space-y-3">
+                    {Object.entries(selectedPrompts).reverse().map(([categoryName, promptId]) => {
+                      if (!promptId || !prompt || !prompt[categoryName]) return null;
+                      const selectedPromptData = prompt[categoryName].find((p: any) => (p.id || p.name) === promptId);
+                      return (
+                        <div key={categoryName} className="flex items-center justify-between p-3 bg-white/5 rounded-lg border border-white/10">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <Badge variant="outline" className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30 text-xs">
+                                {categoryName}
+                              </Badge>
+                            </div>
+                            {selectedPromptData ? (
+                              <div className="flex items-center gap-2">
+                                <p className="text-sm font-medium text-white">{selectedPromptData.name || selectedPromptData.id}</p>
+                                <Badge
+                                  variant="outline"
+                                  className={`text-xs ${selectedPromptData.status === "active"
+                                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+                                    : "bg-red-500/20 text-red-300 border border-red-500/30"
+                                    }`}
+                                >
+                                  {selectedPromptData.status}
+                                </Badge>
+                              </div>
+                            ) : (
+                              <p className="text-sm text-gray-400">Prompt not found</p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 
-              {/* Progress */}
-              <div>
-                <div className="flex justify-between mb-2">
-                  <p className="text-gray-400">Comparison Progress:</p>
-                  <p className="text-white">{apiProgress}%</p>
+              {/* Selected Contract & Ground Truth */}
+              <div className="space-y-4">
+                {/* Selected Contract */}
+                <div>
+                  <label className="text-xs font-medium text-gray-400 uppercase tracking-wider">Selected Contract</label>
+                  <div className="mt-2 p-3 bg-white/5 rounded-lg border border-white/10">
+                    {selectedContract && contracts.length > 0 ? (() => {
+                      const selectedContractData = contracts.find((c: any) => c.contract_id === selectedContract);
+                      return selectedContractData ? (
+                        <div>
+                          <p className="text-sm font-medium text-white">{selectedContractData.contract_file_name}</p>
+                          {selectedContractData.carrier && (
+                            <p className="text-xs text-gray-400">{selectedContractData.carrier}</p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-400">Contract not found</p>
+                      );
+                    })() : (
+                      <p className="text-sm text-gray-400">No contract selected</p>
+                    )}
+                  </div>
                 </div>
-                <Progress value={apiProgress} className="bg-gray-800" />
+
+                {/* Selected Ground Truth */}
+                <div>
+                  <label className="text-xs font-medium text-gray-400 uppercase tracking-wider">Selected Ground Truth</label>
+                  <div className="mt-2 p-3 bg-white/5 rounded-lg border border-white/10">
+                    {selectedGroundTruth && groundTruth.length > 0 ? (() => {
+                      const selectedGroundTruthData = groundTruth.find((gt: any) => gt.contract_id === selectedGroundTruth);
+                      return selectedGroundTruthData ? (
+                        <div>
+                          <p className="text-sm font-medium text-white">{selectedGroundTruthData.contract_file_name}</p>
+                          {selectedGroundTruthData.carrier && (
+                            <p className="text-xs text-gray-400">{selectedGroundTruthData.carrier}</p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-400">Ground truth not found</p>
+                      );
+                    })() : (
+                      <p className="text-sm text-gray-400">No ground truth selected</p>
+                    )}
+                  </div>
+                </div>
               </div>
-
-              {/* Comparison Result */}
-              {comparisonResult && (
-                <div className="space-y-6">
-                  {/* Summary Box */}
-                  <div className="text-center p-6 border border-white/10 rounded-lg bg-white/5">
-                    <h3 className="text-xl mb-2 text-white">Accuracy Score</h3>
-                    <p className="text-4xl font-bold text-emerald-400">{(comparisonResult.similarityIndex ?? 0).toFixed(2)}%</p>
-                    <p className="text-sm text-gray-400 mt-2">{formatTimestamp()}</p>
-                    <div className="mt-4 text-sm">
-                      <span className={comparisonResult.success ? "text-emerald-400" : "text-amber-400"}>
-                        {comparisonResult.success ? "Success" : "Completed"}: {displayMessage}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Results Display */}
-                  <div className="border border-white/10 rounded-lg overflow-hidden bg-white/5">
-                    <div className="bg-white/5 p-4 border-b border-white/10">
-                      <h4 className="text-white font-medium">Table Categories Results</h4>
-                    </div>
-                    <div className="p-4">
-                      <TableCategoryMetrics
-                        tableCategories={comparisonResult.tableCategories || {}}
-                        similarityIndex={comparisonResult.similarityIndex}
-                        rowSimilarity={comparisonResult.rowSimilarity}
-                        completeness={comparisonResult.completeness}
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="mt-6">
-              <Button 
-                className="w-full bg-emerald-600 hover:bg-emerald-700 border-0" 
-                onClick={compareFiles} 
-                disabled={!canCompare || comparing}
-              >
-                {comparing ? "Comparing..." : "Compare Files"}
-              </Button>
             </div>
           </CardContent>
         </Card>
+      )}
 
-        {/* Warnings Display */}
-        {warnings.length > 0 && (
-          <Alert className="border-amber-500/20 bg-amber-500/10">
-            <AlertCircle className="h-4 w-4 text-amber-400" />
-            <AlertDescription className="text-amber-400">
-              <div>
-                <strong>Warnings:</strong>
-                <ul className="list-disc list-inside mt-2">
-                  {warnings.map((warning, index) => (
-                    <li key={index}>{warning}</li>
-                  ))}
-                </ul>
-              </div>
-            </AlertDescription>
-          </Alert>
-        )}
-      </div>
 
       {/* Results */}
       {results && (
@@ -908,12 +610,11 @@ export function AccuracyTester() {
                       <TableCell>
                         <Badge
                           variant="outline"
-                          className={`border-0 ${
-                            detail.status === 'excellent' ? "bg-emerald-500/20 text-emerald-400" :
+                          className={`border-0 ${detail.status === 'excellent' ? "bg-emerald-500/20 text-emerald-400" :
                             detail.status === 'good' ? "bg-blue-500/20 text-blue-400" :
-                            detail.status === 'fair' ? "bg-amber-500/20 text-amber-400" :
-                            "bg-red-500/20 text-red-400"
-                          }`}
+                              detail.status === 'fair' ? "bg-amber-500/20 text-amber-400" :
+                                "bg-red-500/20 text-red-400"
+                            }`}
                         >
                           {detail.status.charAt(0).toUpperCase() + detail.status.slice(1)}
                         </Badge>

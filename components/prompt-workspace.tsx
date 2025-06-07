@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -22,6 +22,8 @@ import {
   Clock,
   Target,
   TrendingUp,
+  Check,
+  Loader2,
 } from "lucide-react"
 import {
   Dialog,
@@ -34,316 +36,26 @@ import {
 import { Label } from "@/components/ui/label"
 import { NewPromptDialog } from "@/components/new-prompt-dialog"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
-
-const promptsData = [
-  {
-    id: "prompt-1",
-    name: "EligibleAccounts-v1",
-    category: "Eligible accounts",
-    accuracy: 85.2,
-    status: "inactive",
-    lastTested: "1 week ago",
-    createdAt: "2025-03-15",
-    testsRun: 45,
-    content: `Extract eligible account information from the contract. Focus on account types, eligibility criteria, and restrictions.
-
-Return JSON format:
-{
-  "eligibleAccountTypes": ["string"],
-  "minimumRequirements": {
-    "creditScore": "number",
-    "annualVolume": "string",
-    "businessType": "string"
-  },
-  "restrictions": ["string"],
-  "specialConditions": "string"
-}
-
-Look for terms like "eligible", "qualified", "approved accounts", "account requirements".`,
-  },
-  {
-    id: "prompt-2",
-    name: "EligibleAccounts-v2",
-    category: "Eligible accounts",
-    accuracy: 88.7,
-    status: "inactive",
-    lastTested: "4 days ago",
-    createdAt: "2025-04-02",
-    testsRun: 38,
-    content: `Extract eligible account information from the contract. Focus on account types, eligibility criteria, and restrictions.
-
-Return JSON format:
-{
-  "eligibleAccountTypes": ["string"],
-  "minimumRequirements": {
-    "creditScore": "number",
-    "annualVolume": "string",
-    "businessType": "string"
-  },
-  "restrictions": ["string"],
-  "specialConditions": "string"
-}
-
-Look for terms like "eligible", "qualified", "approved accounts", "account requirements".`,
-  },
-  {
-    id: "prompt-3",
-    name: "EligibleAccounts-v3",
-    category: "Eligible accounts",
-    accuracy: 89.2,
-    status: "active",
-    lastTested: "2 hours ago",
-    createdAt: "2025-04-18",
-    testsRun: 52,
-    content: `Extract eligible account information from the contract. Focus on account types, eligibility criteria, and restrictions.
-
-Return JSON format:
-{
-  "eligibleAccountTypes": ["string"],
-  "minimumRequirements": {
-    "creditScore": "number",
-    "annualVolume": "string",
-    "businessType": "string"
-  },
-  "restrictions": ["string"],
-  "specialConditions": "string"
-}
-
-Look for terms like "eligible", "qualified", "approved accounts", "account requirements".`,
-  },
-  {
-    id: "prompt-4",
-    name: "IncentiveDiscounts-v1",
-    category: "Incentive base discounts",
-    accuracy: 74.5,
-    status: "inactive",
-    lastTested: "2 weeks ago",
-    createdAt: "2025-03-10",
-    testsRun: 32,
-    content: `Extract incentive-based discount information from shipping contracts.
-
-Return JSON format:
-{
-  "volumeDiscounts": [{"threshold": "string", "discount": "string"}],
-  "loyaltyIncentives": [{"criteria": "string", "benefit": "string"}],
-  "performanceDiscounts": [{"metric": "string", "target": "string", "discount": "string"}],
-  "seasonalIncentives": [{"period": "string", "discount": "string"}]
-}
-
-Focus on volume tiers, performance metrics, loyalty programs, and conditional discounts.`,
-  },
-  {
-    id: "prompt-5",
-    name: "IncentiveDiscounts-v2",
-    category: "Incentive base discounts",
-    accuracy: 76.8,
-    status: "active",
-    lastTested: "4 hours ago",
-    createdAt: "2025-04-05",
-    testsRun: 41,
-    content: `Extract incentive-based discount information from shipping contracts.
-
-Return JSON format:
-{
-  "volumeDiscounts": [{"threshold": "string", "discount": "string"}],
-  "loyaltyIncentives": [{"criteria": "string", "benefit": "string"}],
-  "performanceDiscounts": [{"metric": "string", "target": "string", "discount": "string"}],
-  "seasonalIncentives": [{"period": "string", "discount": "string"}]
-}
-
-Focus on volume tiers, performance metrics, loyalty programs, and conditional discounts.`,
-  },
-  {
-    id: "prompt-6",
-    name: "Tier-v1",
-    category: "Tier",
-    accuracy: 88.3,
-    status: "inactive",
-    lastTested: "1 week ago",
-    createdAt: "2025-03-05",
-    testsRun: 29,
-    content: `Extract tier-based pricing and service level information.
-
-Return JSON format:
-{
-  "serviceTiers": [
-    {
-      "tierName": "string",
-      "level": "number",
-      "features": ["string"],
-      "pricing": "string",
-      "requirements": "string"
-    }
-  ],
-  "tierBenefits": [{"tier": "string", "benefits": ["string"]}],
-  "upgradeCriteria": [{"fromTier": "string", "toTier": "string", "requirements": "string"}]
-}
-
-Look for tier names like "Bronze", "Silver", "Gold", "Premium", service levels, and tier-specific benefits.`,
-  },
-  {
-    id: "prompt-7",
-    name: "Tier-v2",
-    category: "Tier",
-    accuracy: 90.8,
-    status: "inactive",
-    lastTested: "3 days ago",
-    createdAt: "2025-03-22",
-    testsRun: 35,
-    content: `Extract tier-based pricing and service level information.
-
-Return JSON format:
-{
-  "serviceTiers": [
-    {
-      "tierName": "string",
-      "level": "number",
-      "features": ["string"],
-      "pricing": "string",
-      "requirements": "string"
-    }
-  ],
-  "tierBenefits": [{"tier": "string", "benefits": ["string"]}],
-  "upgradeCriteria": [{"fromTier": "string", "toTier": "string", "requirements": "string"}]
-}
-
-Look for tier names like "Bronze", "Silver", "Gold", "Premium", service levels, and tier-specific benefits.`,
-  },
-  {
-    id: "prompt-8",
-    name: "Tier-v3",
-    category: "Tier",
-    accuracy: 92.1,
-    status: "active",
-    lastTested: "1 day ago",
-    createdAt: "2025-04-03",
-    testsRun: 47,
-    content: `Extract tier-based pricing and service level information.
-
-Return JSON format:
-{
-  "serviceTiers": [
-    {
-      "tierName": "string",
-      "level": "number",
-      "features": ["string"],
-      "pricing": "string",
-      "requirements": "string"
-    }
-  ],
-  "tierBenefits": [{"tier": "string", "benefits": ["string"]}],
-  "upgradeCriteria": [{"fromTier": "string", "toTier": "string", "requirements": "string"}]
-}
-
-Look for tier names like "Bronze", "Silver", "Gold", "Premium", service levels, and tier-specific benefits.`,
-  },
-  {
-    id: "prompt-9",
-    name: "Minimums-v5",
-    category: "Minimums",
-    accuracy: 81.5,
-    status: "active",
-    lastTested: "6 hours ago",
-    createdAt: "2025-04-12",
-    testsRun: 43,
-    content: `Extract minimum requirements and thresholds from contracts.
-
-Return JSON format:
-{
-  "minimumCharges": [{"service": "string", "minimum": "string"}],
-  "volumeMinimums": [{"period": "string", "minimum": "string"}],
-  "orderMinimums": [{"type": "string", "minimum": "string"}],
-  "serviceMinimums": [{"service": "string", "requirement": "string"}]
-}
-
-Focus on minimum charges, volume commitments, order quantities, and service requirements.`,
-  },
-  {
-    id: "prompt-10",
-    name: "ServiceAdjustments-v1",
-    category: "Service adjustments",
-    accuracy: 73.2,
-    status: "active",
-    lastTested: "2 days ago",
-    createdAt: "2025-04-01",
-    testsRun: 39,
-    content: `Extract service adjustment clauses and fee modifications.
-
-Return JSON format:
-{
-  "fuelSurcharges": [{"type": "string", "calculation": "string"}],
-  "seasonalAdjustments": [{"period": "string", "adjustment": "string"}],
-  "serviceModifications": [{"service": "string", "adjustment": "string", "conditions": "string"}],
-  "emergencyFees": [{"scenario": "string", "fee": "string"}]
-}
-
-Look for fuel adjustments, seasonal pricing, service modifications, and emergency surcharges.`,
-  },
-  {
-    id: "prompt-11",
-    name: "Accessorials-v3",
-    category: "Accessorials",
-    accuracy: 87.6,
-    status: "active",
-    lastTested: "8 hours ago",
-    createdAt: "2025-04-08",
-    testsRun: 51,
-    content: `Extract accessorial charges and additional service fees.
-
-Return JSON format:
-{
-  "deliveryAccessorials": [{"service": "string", "fee": "string", "conditions": "string"}],
-  "handlingFees": [{"type": "string", "fee": "string"}],
-  "specialServices": [{"service": "string", "fee": "string", "description": "string"}],
-  "equipmentFees": [{"equipment": "string", "fee": "string"}]
-}
-
-Focus on delivery fees, handling charges, special service fees, and equipment-related costs.`,
-  },
-  {
-    id: "prompt-12",
-    name: "ePLD-v2",
-    category: "ePLD",
-    accuracy: 94.3,
-    status: "active",
-    lastTested: "3 hours ago",
-    createdAt: "2025-04-14",
-    testsRun: 48,
-    content: `Extract electronic Proof of Delivery (ePLD) requirements and specifications.
-
-Return JSON format:
-{
-  "epldRequirements": {
-    "mandatory": "boolean",
-    "format": "string",
-    "deliveryMethod": "string"
-  },
-  "signatureRequirements": {
-    "required": "boolean",
-    "type": "string",
-    "authorization": "string"
-  },
-  "documentationNeeded": ["string"],
-  "deliveryConfirmation": {
-    "timeframe": "string",
-    "method": "string",
-    "recipients": ["string"]
-  }
-}
-
-Look for ePLD requirements, signature specifications, delivery confirmation processes.`,
-  },
-]
-
+import { useToast } from "@/components/ui/use-toast"
 const categories = [
-  "Eligible accounts",
-  "Incentive base discounts",
+  "Incentive_base_discounts",
+  "Eligible_accounts",
   "Tier",
   "Minimums",
-  "Service adjustments",
+  "Service_adjustments",
   "Accessorials",
   "ePLD",
+  "DIM"
 ]
+
+const Spinner = () => {
+  return (
+    <div className="flex items-center justify-center">
+      <Loader2 className="h-4 w-4 animate-spin" />
+    </div>
+  )
+}
+const API_BASE_URL = "http://localhost:8081/api/v1"
 
 export function PromptWorkspace() {
   const [selectedPrompt, setSelectedPrompt] = useState<any>(null)
@@ -351,13 +63,16 @@ export function PromptWorkspace() {
   const [newPromptDialogOpen, setNewPromptDialogOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const [editingPrompt, setEditingPrompt] = useState<any>(null)
+  const [promptsData, setPromptsData] = useState<any[]>([])
+  const [isActivatingPrompt, setIsActivatingPrompt] = useState(false)
   const [expandedCategories, setExpandedCategories] = useState<string[]>(categories)
+  const { toast } = useToast()
 
-  const filteredPrompts = promptsData.filter(
+  const filteredPrompts = promptsData.length > 0 ? promptsData?.filter(
     (prompt) =>
-      prompt.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      prompt.category.toLowerCase().includes(searchQuery.toLowerCase()),
-  )
+      prompt.name.toLowerCase().includes(searchQuery?.toLowerCase()) ||
+      prompt.category.toLowerCase().includes(searchQuery?.toLowerCase()),
+  ) : []
 
   const promptsByCategory = categories.reduce(
     (acc, category) => {
@@ -399,6 +114,87 @@ export function PromptWorkspace() {
     }
   }
 
+  const getPromptData = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/prompt/prompts`);
+      const data = await response.json();
+      setPromptsData(data.prompts);
+    } catch (error) {
+      console.log("Error fetching prompts:", error);
+      toast({
+        title: "Error fetching prompts",
+        description: "Please try again later",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const handleSetActivePrompt = async (prompt: any) => {
+    setIsActivatingPrompt(true)
+    try {
+      const data = {
+        "status": "active"
+      }
+      const response = await fetch(`${API_BASE_URL}/prompt/prompts/${prompt.id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+        headers: {
+          "Content-Type": "application/json",
+        },
+      })
+      const updatedPrompt = await response.json()
+      console.log("Updated prompt:", updatedPrompt)
+      toast({
+        title: "Prompt updated",
+        description: "Prompt updated successfully",
+      })
+      setSelectedPrompt(updatedPrompt)
+      getPromptData()
+    } catch (error) {
+      console.log("Error updating prompt:", error)
+      toast({
+        title: "Error updating prompt",
+        description: "Please try again later",
+        variant: "destructive",
+      })
+    } finally {
+      setIsActivatingPrompt(false)
+    }
+  }
+
+  const updatePrompt = async (prompt: any) => {
+    try {
+      // /prompts/{prompt_id}
+      const response = await fetch(`${API_BASE_URL}/prompt/prompts/${prompt.id}`, {
+        method: "PUT",
+        body: JSON.stringify(prompt),
+        headers: {
+          "Content-Type": "application/json",
+        },
+      })
+      const data = await response.json()
+      console.log("Updated prompt:", data)
+      toast({
+        title: "Prompt updated",
+        description: "Prompt updated successfully",
+      })
+      setEditDialogOpen(false)
+      setSelectedPrompt(data)
+      getPromptData()
+    } catch (error) {
+      console.log("Error updating prompt:", error)
+      toast({
+        title: "Error updating prompt",
+        description: "Please try again later",
+        variant: "destructive",
+      })
+    }
+  }
+
+  useEffect(() => {
+    getPromptData()
+  }, [])
+
   return (
     <div className="flex h-full">
       {/* Main Prompt Library */}
@@ -433,7 +229,7 @@ export function PromptWorkspace() {
             </div>
 
             {/* Categories */}
-            <div className="space-y-4">
+            <div className="space-y-4 overflow-y-auto" style={{ height: "calc(100vh - 220px)" }}>
               {categories.map((category) => {
                 const stats = getCategoryStats(category)
                 const isExpanded = expandedCategories.includes(category)
@@ -459,13 +255,12 @@ export function PromptWorkspace() {
                                 </Badge>
                                 <Badge
                                   variant="outline"
-                                  className={`border-0 ${
-                                    Number(stats.avgAccuracy) >= 90
-                                      ? "bg-emerald-500/20 text-emerald-400"
-                                      : Number(stats.avgAccuracy) >= 80
-                                        ? "bg-blue-500/20 text-blue-400"
-                                        : "bg-amber-500/20 text-amber-400"
-                                  }`}
+                                  className={`border-0 ${Number(stats.avgAccuracy) >= 90
+                                    ? "bg-emerald-500/20 text-emerald-400"
+                                    : Number(stats.avgAccuracy) >= 80
+                                      ? "bg-blue-500/20 text-blue-400"
+                                      : "bg-amber-500/20 text-amber-400"
+                                    }`}
                                 >
                                   {stats.avgAccuracy}% avg
                                 </Badge>
@@ -482,11 +277,10 @@ export function PromptWorkspace() {
                             {categoryPrompts.map((prompt) => (
                               <Card
                                 key={prompt.id}
-                                className={`cursor-pointer transition-all duration-200 border ${
-                                  selectedPrompt?.id === prompt.id
-                                    ? "border-emerald-500 bg-emerald-500/10 shadow-lg shadow-emerald-500/20"
-                                    : "border-white/10 bg-white/5 hover:bg-white/10 hover:border-white/20"
-                                }`}
+                                className={`cursor-pointer transition-all duration-200 border ${selectedPrompt?.id === prompt.id
+                                  ? "border-emerald-500 bg-emerald-500/10 shadow-lg shadow-emerald-500/20"
+                                  : "border-white/10 bg-white/5 hover:bg-white/10 hover:border-white/20"
+                                  }`}
                                 onClick={() => handlePromptClick(prompt)}
                               >
                                 <CardContent className="p-4">
@@ -498,23 +292,21 @@ export function PromptWorkspace() {
                                         <div className="flex items-center gap-2 mt-1">
                                           <Badge
                                             variant="outline"
-                                            className={`text-xs border-0 ${
-                                              prompt.status === "active"
-                                                ? "bg-emerald-500/20 text-emerald-400"
-                                                : "bg-gray-500/20 text-gray-400"
-                                            }`}
+                                            className={`text-xs border-0 ${prompt.status === "active"
+                                              ? "bg-emerald-500/20 text-emerald-400"
+                                              : "bg-gray-500/20 text-gray-400"
+                                              }`}
                                           >
                                             {prompt.status}
                                           </Badge>
                                           <Badge
                                             variant="outline"
-                                            className={`text-xs border-0 ${
-                                              prompt.accuracy >= 90
-                                                ? "bg-emerald-500/20 text-emerald-400"
-                                                : prompt.accuracy >= 80
-                                                  ? "bg-blue-500/20 text-blue-400"
-                                                  : "bg-amber-500/20 text-amber-400"
-                                            }`}
+                                            className={`text-xs border-0 ${prompt.accuracy >= 90
+                                              ? "bg-emerald-500/20 text-emerald-400"
+                                              : prompt.accuracy >= 80
+                                                ? "bg-blue-500/20 text-blue-400"
+                                                : "bg-amber-500/20 text-amber-400"
+                                              }`}
                                           >
                                             {prompt.accuracy}%
                                           </Badge>
@@ -643,11 +435,10 @@ export function PromptWorkspace() {
                     <span className="text-gray-400">Status:</span>
                     <Badge
                       variant="outline"
-                      className={`border-0 ${
-                        selectedPrompt.status === "active"
-                          ? "bg-emerald-500/20 text-emerald-400"
-                          : "bg-gray-500/20 text-gray-400"
-                      }`}
+                      className={`border-0 ${selectedPrompt.status === "active"
+                        ? "bg-emerald-500/20 text-emerald-400"
+                        : "bg-gray-500/20 text-gray-400"
+                        }`}
                     >
                       {selectedPrompt.status}
                     </Badge>
@@ -684,9 +475,10 @@ export function PromptWorkspace() {
                     <Copy className="h-4 w-4 mr-2" />
                     Duplicate
                   </Button>
-                  <Button size="sm" className="w-full justify-start bg-emerald-600 hover:bg-emerald-700 border-0">
-                    <Play className="h-4 w-4 mr-2" />
-                    Test Now
+                  <Button size="sm" disabled={selectedPrompt.status === "active" || isActivatingPrompt} className={`w-full justify-start ${selectedPrompt.status !== "active" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-gray-600 hover:bg-gray-700"} border-0`} onClick={() => handleSetActivePrompt(selectedPrompt)}>
+                    {selectedPrompt.status === "active" ? <Check className="h-4 w-4 mr-2" /> : <Play className="h-4 w-4 mr-2" />}
+                    {selectedPrompt.status === "active" ? "Active" : "Activate Prompt"}
+                    {isActivatingPrompt && <Spinner />}
                   </Button>
                   <Button
                     variant="outline"
@@ -729,7 +521,18 @@ export function PromptWorkspace() {
                 <Input
                   id="name"
                   value={editingPrompt.name}
-                  onChange={(e) => setEditingPrompt({ ...editingPrompt, name: e.target.value })}
+                  readOnly
+                  className="col-span-3"
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="description" className="text-right">
+                  Description
+                </Label>
+                <Input
+                  id="description"
+                  value={editingPrompt.description}
+                  onChange={(e) => setEditingPrompt({ ...editingPrompt, description: e.target.value })}
                   className="col-span-3"
                 />
               </div>
@@ -770,11 +573,11 @@ export function PromptWorkspace() {
             <Button variant="outline" onClick={() => setEditDialogOpen(false)}>
               Cancel
             </Button>
-            <Button variant="outline">
+            {/* <Button variant="outline">
               <Play className="h-4 w-4 mr-2" />
               Test Changes
-            </Button>
-            <Button onClick={() => setEditDialogOpen(false)}>
+            </Button> */}
+            <Button onClick={() => updatePrompt(editingPrompt)}>
               <Save className="h-4 w-4 mr-2" />
               Save Changes
             </Button>

@@ -28,11 +28,14 @@ import {
 } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { ModelSelector } from "@/components/model-selector"
+import { useToast } from "@/hooks/use-toast"
 
 interface NewPromptDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
 }
+
+const API_BASE_URL = "http://localhost:8081/api/v1"
 
 const categories = [
   "Eligible accounts",
@@ -42,13 +45,7 @@ const categories = [
   "Service adjustments",
   "Accessorials",
   "ePLD",
-]
-
-const existingPrompts = [
-  { id: "eligible-v3", name: "EligibleAccounts-v3", category: "Eligible accounts", accuracy: 87.2 },
-  { id: "tier-v3", name: "Tier-v3", category: "Tier", accuracy: 92.1 },
-  { id: "epld-v2", name: "ePLD-v2", category: "ePLD", accuracy: 94.3 },
-  { id: "accessorials-v3", name: "Accessorials-v3", category: "Accessorials", accuracy: 87.6 },
+  "DIM"
 ]
 
 const promptTemplates = {
@@ -104,6 +101,7 @@ export function NewPromptDialog({ open, onOpenChange }: NewPromptDialogProps) {
     name: "",
     category: "",
     description: "",
+    carrier: "",
     creationMethod: "",
     sourcePrompt: "",
     promptContent: "",
@@ -126,10 +124,13 @@ export function NewPromptDialog({ open, onOpenChange }: NewPromptDialogProps) {
     notes: "",
   })
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [existingPrompts, setExistingPrompts] = useState<any[]>([])
   const [validationErrors, setValidationErrors] = useState<string[]>([])
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([])
+  const { toast } = useToast()
 
-  const generatePromptName = (category: string) => {
+
+  const generatePromptName = (category: string, carrier: string) => {
     if (!category) return ""
     const categoryKey = category.replace(/\s+/g, "")
     const existingVersions = existingPrompts
@@ -139,14 +140,13 @@ export function NewPromptDialog({ open, onOpenChange }: NewPromptDialogProps) {
         return match ? Number.parseInt(match[1]) : 0
       })
     const nextVersion = Math.max(...existingVersions, 0) + 1
-    return `${categoryKey}-v${nextVersion}`
+    return `${categoryKey}_${carrier}_v${nextVersion}`
   }
 
   const handleCategoryChange = (category: string) => {
     setFormData({
       ...formData,
-      category,
-      name: generatePromptName(category),
+      category
     })
 
     // Generate AI suggestions based on category
@@ -188,11 +188,11 @@ export function NewPromptDialog({ open, onOpenChange }: NewPromptDialogProps) {
 
   const validateForm = () => {
     const errors: string[] = []
-    if (!formData.name.trim()) errors.push("Prompt name is required")
     if (!formData.category) errors.push("Category must be selected")
     if (!formData.creationMethod) errors.push("Creation method must be selected")
-    if (!formData.promptContent.trim()) errors.push("Prompt content is required")
-
+    if (!formData.carrier) errors.push("Carrier must be selected")
+    const name = generatePromptName(formData.category, formData.carrier)
+    setFormData({ ...formData, name })
     setValidationErrors(errors)
     return errors.length === 0
   }
@@ -209,37 +209,60 @@ export function NewPromptDialog({ open, onOpenChange }: NewPromptDialogProps) {
     if (step > 1) setStep(step - 1)
   }
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (validateForm()) {
       // Here you would save the prompt
       console.log("Saving prompt:", formData)
-      onOpenChange(false)
-      // Reset form
-      setFormData({
-        name: "",
-        category: "",
-        description: "",
-        creationMethod: "",
-        sourcePrompt: "",
-        promptContent: "",
-        systemInstructions: "",
-        fewShotExamples: "",
-        outputFormat: "json",
-        requiredFields: [],
-        validationRules: "",
-        autoTest: true,
-        testSampleSize: 25,
-        baselineComparison: true,
-        selectedModels: ["gpt-4o", "claude-3-5-sonnet"],
-        primaryModel: "gpt-4o",
-        temperature: 0.7,
-        maxTokens: 2000,
-        retryLogic: false,
-        confidenceThreshold: 0.8,
-        tags: [],
-        expectedImprovement: "",
-        notes: "",
+      const response = await fetch(`${API_BASE_URL}/prompt/prompts`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(formData),
       })
+      if (response.ok) {
+        console.log("Prompt saved successfully")
+        toast({
+          title: "Prompt saved successfully",
+          description: "Your prompt has been saved successfully",
+          variant: "default"
+        })
+        onOpenChange(false)
+        // Reset form
+        setFormData({
+          name: "",
+          category: "",
+          description: "",
+          carrier: "",
+          creationMethod: "",
+          sourcePrompt: "",
+          promptContent: "",
+          systemInstructions: "",
+          fewShotExamples: "",
+          outputFormat: "json",
+          requiredFields: [],
+          validationRules: "",
+          autoTest: true,
+          testSampleSize: 25,
+          baselineComparison: true,
+          selectedModels: ["gpt-4o", "claude-3-5-sonnet"],
+          primaryModel: "gpt-4o",
+          temperature: 0.7,
+          maxTokens: 2000,
+          retryLogic: false,
+          confidenceThreshold: 0.8,
+          tags: [],
+          expectedImprovement: "",
+          notes: "",
+        })
+      } else {
+        console.log("Failed to save prompt")
+        toast({
+          title: "Failed to save prompt",
+          description: "Please try again",
+          variant: "destructive"
+        })
+      }
       setStep(1)
       setValidationErrors([])
     }
@@ -273,6 +296,12 @@ export function NewPromptDialog({ open, onOpenChange }: NewPromptDialogProps) {
     setFormData({ ...formData, requiredFields: formData.requiredFields.filter((f) => f !== field) })
   }
 
+  const handleCarrierChange = (value: string) => {
+    setFormData({ ...formData, carrier: value })
+  }
+
+  const carriers = ["FedEx", "UPS"]
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[900px] max-h-[90vh] overflow-y-auto bg-gray-900 border-white/20">
@@ -297,13 +326,12 @@ export function NewPromptDialog({ open, onOpenChange }: NewPromptDialogProps) {
             {[1, 2, 3].map((stepNum) => (
               <div key={stepNum} className="flex items-center">
                 <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all ${
-                    stepNum <= step
-                      ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/30"
-                      : stepNum === step + 1
-                        ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-                        : "bg-gray-800 text-gray-500 border border-gray-700"
-                  }`}
+                  className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all ${stepNum <= step
+                    ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/30"
+                    : stepNum === step + 1
+                      ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                      : "bg-gray-800 text-gray-500 border border-gray-700"
+                    }`}
                 >
                   {stepNum < step ? <CheckCircle className="h-4 w-4" /> : stepNum}
                 </div>
@@ -337,7 +365,7 @@ export function NewPromptDialog({ open, onOpenChange }: NewPromptDialogProps) {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="category" className="text-white">
                         Category *
@@ -355,18 +383,6 @@ export function NewPromptDialog({ open, onOpenChange }: NewPromptDialogProps) {
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="name" className="text-white">
-                        Prompt Name *
-                      </Label>
-                      <Input
-                        id="name"
-                        value={formData.name}
-                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                        placeholder="e.g., EligibleAccounts-v4"
-                        className="bg-white/5 border-white/10 text-white placeholder:text-gray-500"
-                      />
-                    </div>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="description" className="text-white">
@@ -379,6 +395,23 @@ export function NewPromptDialog({ open, onOpenChange }: NewPromptDialogProps) {
                       placeholder="Brief explanation of what this prompt aims to improve"
                       className="bg-white/5 border-white/10 text-white placeholder:text-gray-500"
                     />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="carrier" className="text-white">
+                      Carrier *
+                    </Label>
+                    <Select value={formData.carrier} onValueChange={handleCarrierChange}>
+                      <SelectTrigger className="bg-white/5 border-white/10 text-white">
+                        <SelectValue placeholder="Select carrier" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-gray-900 border-white/20">
+                        {carriers.map((carrier) => (
+                          <SelectItem key={carrier} value={carrier} className="text-white hover:bg-white/10">
+                            {carrier}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 </CardContent>
               </Card>
@@ -418,11 +451,10 @@ export function NewPromptDialog({ open, onOpenChange }: NewPromptDialogProps) {
                     ].map((method) => (
                       <Card
                         key={method.id}
-                        className={`cursor-pointer transition-all ${
-                          formData.creationMethod === method.id
-                            ? "border-emerald-500 bg-emerald-500/10"
-                            : "border-white/10 bg-white/5 hover:bg-white/10"
-                        }`}
+                        className={`cursor-pointer transition-all ${formData.creationMethod === method.id
+                          ? "border-emerald-500 bg-emerald-500/10"
+                          : "border-white/10 bg-white/5 hover:bg-white/10"
+                          }`}
                         onClick={() => handleCreationMethodChange(method.id)}
                       >
                         <CardContent className="pt-4">
