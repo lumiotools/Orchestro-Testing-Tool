@@ -7,13 +7,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider"
 import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
-import { Play, RotateCcw, Download, Upload, Zap, Brain, Globe, Sparkles, Cpu, FileJson, Key, AlertCircle } from "lucide-react"
+import { Play, RotateCcw, Download, Upload, Zap, Brain, Globe, Sparkles, Cpu, FileJson, Key, AlertCircle, Search } from "lucide-react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { ModelSelector, availableModels } from "@/components/model-selector"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
-
-const API_BASE_URL = "http://localhost:8081/api/v1"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -26,6 +24,8 @@ import {
   type GroundTruthContract,
   type ContractOption
 } from "@/lib/ground-truth-loader"
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8080/api/v1"
 
 interface TestResult {
   accuracy: number
@@ -84,34 +84,148 @@ export function AccuracyTester() {
   const [testMode, setTestMode] = useState<"single" | "comparison">("single")
   const [loading, setLoading] = useState(false)
   const [isContractLoading, setIsContractLoading] = useState(false)
+  const [isUploading, setIsUploading] = useState(false)
+  const [contractSearchTerm, setContractSearchTerm] = useState("")
+  const [groundTruthSearchTerm, setGroundTruthSearchTerm] = useState("")
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null)
+  const [testHistory, setTestHistory] = useState<any[]>([])
+  const [activeTestId, setActiveTestId] = useState<number | null>(null)
+  const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null)
   const { toast } = useToast()
 
+  // Hardcoded member_ids for now - will be replaced with proper auth later
+  const MEMBER_ID_REGULAR = 100695 // For regular contracts
+  const MEMBER_ID_GROUND_TRUTH = 100000 // For ground truth contracts
+
   const handleRunTest = async () => {
-    setIsRunning(true)
-    const data = {
-      prompt_ids: Object.values(selectedPrompts),
-      contract_id: selectedContract,
-      ground_truth_id: selectedGroundTruth,
-      save_results: false,
-      contract_name: contracts.find((contract: any) => contract.contract_id === selectedContract)?.contract_file_name,
-      version_id: selectedContractVersion,
-      ground_truth_version_id: selectedGroundTruthVersion,
-    };
-    try {
-      console.log("🚀 => data:", data);
-      // const response = await fetch(`${API_BASE_URL}/prompt/prompts/test`, {
-      //   method: "POST",
-      //   headers: {
-      //     "Content-Type": "application/json",
-      //   },
-      //   body: JSON.stringify(data),
-      // });
-      // const responseData = await response.json();
-      // console.log("🚀 => responseData:", responseData);
-    } catch (error) {
+    // Validation
+    if (Object.keys(selectedPrompts).length === 0) {
       toast({
-        title: "Error fetching prompts",
-        description: "Please try again later",
+        title: "No prompts selected",
+        description: "Please select at least one prompt to test",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!selectedGroundTruth) {
+      toast({
+        title: "No ground truth selected",
+        description: "Please select a ground truth for comparison",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!uploadedFile && !selectedContract) {
+      toast({
+        title: "No contract selected",
+        description: "Please select a contract or upload a PDF file",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsRunning(true)
+    
+    try {
+      const promptIds = Object.values(selectedPrompts).filter(id => id) as string[]
+      
+      if (uploadedFile) {
+        // Use test-upload endpoint when PDF is uploaded
+        const formData = new FormData()
+        formData.append('file', uploadedFile)
+        
+        const params = new URLSearchParams({
+          prompt_ids: promptIds.join(','),
+          contract_name: uploadedFile.name.replace('.pdf', ''),
+          ground_truth_id: selectedGroundTruth,
+          ground_truth_version_id: selectedGroundTruthVersion?.toString() || '',
+          ground_truth_member_id: MEMBER_ID_GROUND_TRUTH.toString(),
+          save: 'true'
+        })
+
+        const response = await fetch(`${API_BASE_URL}/prompt/prompts/test-upload?${params}`, {
+          method: "POST",
+          body: formData,
+        })
+
+        if (!response.ok) {
+          throw new Error(`Upload test failed: ${response.statusText}`)
+        }
+
+        const result = await response.json()
+        console.log("🚀 Upload test started:", result)
+        
+        // Add to test history and start polling
+        const testData = addTestToHistory({
+          test_id: result.test_id || Date.now(),
+          ...result
+        })
+        
+        if (result.test_id) {
+          startPolling(result.test_id)
+        }
+        
+        toast({
+          title: "Test started successfully",
+          description: `Testing with uploaded file: ${uploadedFile.name}`,
+          variant: "default",
+        })
+        
+      } else {
+        // Use test endpoint when contract is selected from dropdown
+        const selectedContractData = contracts.find((contract: any) => contract.contract_id === selectedContract)
+        
+        const testData = {
+          prompt_ids: promptIds,
+          contract_id: parseInt(selectedContract),
+          contract_name: selectedContractData?.contract_file_name || '',
+          ground_truth_id: parseInt(selectedGroundTruth),
+          version_id: parseInt(selectedContractVersion),
+          ground_truth_version_id: parseInt(selectedGroundTruthVersion),
+          contract_member_id: MEMBER_ID_REGULAR,
+          ground_truth_member_id: MEMBER_ID_GROUND_TRUTH,
+          save: true
+        }
+
+        const response = await fetch(`${API_BASE_URL}/prompt/prompts/test`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(testData),
+        })
+
+        if (!response.ok) {
+          throw new Error(`Test failed: ${response.statusText}`)
+        }
+
+        const result = await response.json()
+        console.log("🚀 Contract test started:", result)
+        
+        // Add to test history and start polling
+        const historyData = addTestToHistory({
+          test_id: result.test_id || Date.now(),
+          ...result
+        })
+        
+        if (result.test_id) {
+          startPolling(result.test_id)
+        }
+        
+        toast({
+          title: "Test started successfully",
+          description: `Testing contract: ${selectedContractData?.contract_file_name}`,
+          variant: "default",
+        })
+      }
+
+    } catch (error) {
+      console.error("Error running test:", error)
+      toast({
+        title: "Test failed",
+        description: error instanceof Error ? error.message : "Please try again later",
         variant: "destructive",
       })
     } finally {
@@ -150,27 +264,110 @@ export function AccuracyTester() {
   const getContracts = async () => {
     try {
       setIsContractLoading(true)
-      const response = await fetch(`${API_BASE_URL}/contract/list?timestamp=${new Date().getTime()}`, {
+      
+      // Fetch regular contracts (member_id = 1)
+      const regularResponse = await fetch(`${API_BASE_URL}/contract/list?member_id=${MEMBER_ID_REGULAR}&timestamp=${new Date().getTime()}`, {
         method: "GET",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": localStorage.getItem("accessToken") || "",
         },
       })
-      const data = await response.json()
-      const nonGroundTruthContracts = data.data.contracts.filter((contract: any) => !contract.ground_truth && contract.status === "Active")
-      setContracts(nonGroundTruthContracts)
-      const groundTruthContracts = data.data.contracts.filter((contract: any) => contract.ground_truth)
-      setGroundTruth(groundTruthContracts)
+      
+      // Fetch ground truth contracts (member_id = 2)
+      const groundTruthResponse = await fetch(`${API_BASE_URL}/contract/list?member_id=${MEMBER_ID_GROUND_TRUTH}&timestamp=${new Date().getTime()}`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      })
+      
+      if (!regularResponse.ok || !groundTruthResponse.ok) {
+        throw new Error(`HTTP error! Regular: ${regularResponse.status}, Ground Truth: ${groundTruthResponse.status}`)
+      }
+      
+      const regularData = await regularResponse.json()
+      const groundTruthData = await groundTruthResponse.json()
+      
+      // Process regular contracts
+      if (regularData.success && regularData.data && regularData.data.contracts) {
+        const nonGroundTruthContracts = regularData.data.contracts.filter((contract: any) => 
+          contract.status === "Active"
+        )
+        setContracts(nonGroundTruthContracts)
+      } else {
+        setContracts([])
+      }
+      
+      // Process ground truth contracts
+      if (groundTruthData.success && groundTruthData.data && groundTruthData.data.contracts) {
+        const groundTruthContracts = groundTruthData.data.contracts.filter((contract: any) => 
+          contract.status === "Completed"
+        )
+        setGroundTruth(groundTruthContracts)
+      } else {
+        setGroundTruth([])
+      }
+      
     } catch (error) {
+      console.error("Error fetching contracts:", error)
       toast({
         title: "Error fetching contracts",
+        description: "Please check your connection and try again",
+        variant: "destructive",
+      })
+      // Set empty arrays on error
+      setContracts([])
+      setGroundTruth([])
+    } finally {
+      setIsContractLoading(false)
+    }
+  }
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    if (file.type !== 'application/pdf') {
+      toast({
+        title: "Invalid file type",
+        description: "Please upload a PDF file",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsUploading(true)
+      
+      // Store the uploaded file for testing
+      setUploadedFile(file)
+      
+      // Clear any selected contract since we're using uploaded file
+      setSelectedContract(null)
+      setSelectedContractVersion(null)
+      
+      toast({
+        title: "PDF file ready for testing",
+        description: `File: ${file.name} is ready to be tested`,
+        variant: "default",
+      })
+
+      // Reset file input
+      event.target.value = ''
+    } catch (error) {
+      console.error("Error handling file:", error)
+      toast({
+        title: "File handling failed",
         description: "Please try again later",
         variant: "destructive",
       })
     } finally {
-      setIsContractLoading(false)
+      setIsUploading(false)
     }
+  }
+
+  const clearUploadedFile = () => {
+    setUploadedFile(null)
   }
 
   const segregatePrompts = (prompts: any) => {
@@ -195,15 +392,187 @@ export function AccuracyTester() {
     }
   }
 
+  // Filter contracts based on search term
+  const filterContracts = (contractsList: any[], searchTerm: string) => {
+    if (!searchTerm) return contractsList
+    
+    return contractsList.filter((contract: any) => {
+      const searchLower = searchTerm.toLowerCase()
+      return (
+        contract.contract_file_name?.toLowerCase().includes(searchLower) ||
+        contract.carrier?.toLowerCase().includes(searchLower) ||
+        contract.contract_id?.toString().includes(searchTerm) ||
+        contract.current_version_id?.toString().includes(searchTerm)
+      )
+    })
+  }
+
+  const filteredContracts = filterContracts(contracts, contractSearchTerm)
+  const filteredGroundTruth = filterContracts(groundTruth, groundTruthSearchTerm)
+
+  // Poll test status for active tests
+  const pollTestStatus = async (testId: number) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/prompt/prompts/test/${testId}/status`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to get test status: ${response.statusText}`)
+      }
+
+      const result = await response.json()
+      
+      // Update test history
+      setTestHistory(prev => prev.map(test => 
+        test.test_id === testId ? { ...test, ...result.data } : test
+      ))
+
+      // If test is completed, stop polling
+      if (result.data?.status === 'completed' || result.data?.status === 'failed') {
+        setActiveTestId(null)
+        if (pollingInterval) {
+          clearInterval(pollingInterval)
+          setPollingInterval(null)
+        }
+        
+        toast({
+          title: result.data?.status === 'completed' ? "Test completed!" : "Test failed",
+          description: `Test ID: ${testId} has ${result.data?.status}`,
+          variant: result.data?.status === 'completed' ? "default" : "destructive",
+        })
+        
+        return true // Indicate test is finished
+      }
+
+      return false // Test still running
+    } catch (error) {
+      console.error("Error polling test status:", error)
+      return false
+    }
+  }
+
+  // Start polling for a test
+  const startPolling = (testId: number) => {
+    setActiveTestId(testId)
+    
+    // Clear any existing interval
+    if (pollingInterval) {
+      clearInterval(pollingInterval)
+    }
+    
+    // Start new interval
+    const interval = setInterval(async () => {
+      const isFinished = await pollTestStatus(testId)
+      if (isFinished) {
+        clearInterval(interval)
+      }
+    }, 3000) // Poll every 3 seconds
+    
+    setPollingInterval(interval)
+  }
+
+  // Get test history from backend
+  const getTestHistory = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/prompt/prompts/test-history`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      })
+
+      if (response.ok) {
+        const result = await response.json()
+        if (result.success && result.tests) {
+          // Merge with local history, avoiding duplicates
+          setTestHistory(prev => {
+            const serverTests = result.tests || []
+            const existingIds = new Set(prev.map(test => test.test_id))
+            const newTests = serverTests.filter((test: any) => !existingIds.has(test.test_id))
+            return [...prev, ...newTests].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+          })
+        }
+      }
+    } catch (error) {
+      console.error("Error fetching test history:", error)
+    }
+  }
+
+  // Add new test to history
+  const addTestToHistory = (testData: any) => {
+    const newTest = {
+      test_id: testData.test_id,
+      created_at: new Date().toISOString(),
+      status: 'processing',
+      prompt_count: Object.keys(selectedPrompts).length,
+      contract_name: uploadedFile ? uploadedFile.name : contracts.find((c: any) => c.contract_id === selectedContract)?.contract_file_name,
+      ground_truth_name: groundTruth.find((gt: any) => gt.contract_id === selectedGroundTruth)?.contract_file_name,
+      test_type: uploadedFile ? 'upload' : 'contract',
+      ...testData
+    }
+    
+    setTestHistory(prev => [newTest, ...prev])
+    return newTest
+  }
 
   useEffect(() => {
     getPrompts();
     getContracts();
+    getTestHistory(); // Load test history on mount
   }, [])
+
+  // Cleanup polling interval on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingInterval) {
+        clearInterval(pollingInterval)
+      }
+    }
+  }, [pollingInterval])
+
+  // Format date for display
+  const formatDateTime = (dateString: string) => {
+    const date = new Date(dateString)
+    return {
+      date: date.toLocaleDateString(),
+      time: date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    }
+  }
+
+  // Get status badge variant
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'completed':
+        return "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
+      case 'processing':
+        return "bg-blue-500/20 text-blue-400 border-blue-500/30"
+      case 'failed':
+        return "bg-red-500/20 text-red-400 border-red-500/30"
+      default:
+        return "bg-gray-500/20 text-gray-400 border-gray-500/30"
+    }
+  }
 
   return (
     <div className="space-y-6">
-
+      {/* Processing Indicator */}
+      {activeTestId && (
+        <Card className="glass-card border-0 border-l-4 border-l-blue-500">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-3">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-400"></div>
+              <div>
+                <p className="text-white font-medium">Test in Progress</p>
+                <p className="text-gray-400 text-sm">Test ID: {activeTestId} is being processed...</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Test Configuration */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -299,62 +668,163 @@ export function AccuracyTester() {
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium text-white">Choose Contracts</label>
-              <Select value={selectedContract} onValueChange={(value) => {
-                setSelectedContract(value)
-                setSelectedContractVersion(contracts.find((contract: any) => contract.contract_id === value)?.current_version_id)
-              }}>
-                <SelectTrigger className="bg-white/5 border-white/10 text-white">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="bg-gray-900 border-white/20">
-                  {isContractLoading ? (
-                    <div className="text-white px-4 py-2">Loading...</div>
-                  ) : (
-                    contracts.length > 0 ? contracts.map((contract: any) => (
-                      <SelectItem
-                        key={contract.contract_id}
-                        value={contract.contract_id}
-                        className="text-white hover:bg-white/10"
-                      >
-                        {contract.contract_file_name} - {contract?.carrier}
-                      </SelectItem>
-                    )) : (
-                      <SelectItem value="no-contracts" className="text-white hover:bg-white/10">
-                        No contracts found
-                      </SelectItem>
-                    )
-                  )}
-                </SelectContent>
-              </Select>
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium text-white">Choose Contracts</label>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={isUploading}
+                  className="border-white/20 text-white hover:bg-white/10"
+                  onClick={() => document.getElementById('contract-upload')?.click()}
+                >
+                  <Upload className="h-4 w-4 mr-2" />
+                  {isUploading ? "Loading..." : "Upload PDF"}
+                </Button>
+                <input
+                  id="contract-upload"
+                  type="file"
+                  accept=".pdf"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+              </div>
+              
+              {/* Show uploaded file status */}
+              {uploadedFile && (
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <FileJson className="h-4 w-4 text-emerald-400" />
+                      <span className="text-sm text-emerald-400 font-medium">
+                        Uploaded: {uploadedFile.name}
+                      </span>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={clearUploadedFile}
+                      className="h-6 px-2 text-emerald-400 hover:bg-emerald-500/20"
+                    >
+                      ✕
+                    </Button>
+                  </div>
+                </div>
+              )}
+              
+              {/* Contract selection dropdown - only show if no file uploaded */}
+              {!uploadedFile && (
+                <Select value={selectedContract} onValueChange={(value) => {
+                  setSelectedContract(value)
+                  const contract = contracts.find((contract: any) => contract.contract_id === value)
+                  setSelectedContractVersion(contract?.current_version_id)
+                }}>
+                  <SelectTrigger className="bg-white/5 border-white/10 text-white">
+                    <SelectValue placeholder="Select a contract..." />
+                  </SelectTrigger>
+                  <SelectContent className="bg-gray-900 border-white/20">
+                    {isContractLoading ? (
+                      <div className="text-white px-4 py-2">Loading...</div>
+                    ) : (
+                      <>
+                        {contracts.length > 5 && (
+                          <div className="px-3 py-2 border-b border-white/10">
+                            <div className="relative">
+                              <Search className="absolute left-2 top-2.5 h-4 w-4 text-gray-400" />
+                              <Input
+                                placeholder="Search contracts..."
+                                value={contractSearchTerm}
+                                onChange={(e) => setContractSearchTerm(e.target.value)}
+                                className="pl-8 h-8 bg-white/5 border-white/10 text-white placeholder:text-gray-400 focus:border-emerald-500"
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            </div>
+                          </div>
+                        )}
+                        {filteredContracts.length > 0 ? filteredContracts.map((contract: any) => (
+                          <SelectItem
+                            key={contract.contract_id}
+                            value={contract.contract_id}
+                            className="text-white hover:bg-white/10"
+                          >
+                            <div className="flex flex-col py-1">
+                              <span className="font-medium">{contract.contract_file_name}</span>
+                              <div className="flex items-center gap-3 text-xs text-gray-400 mt-1">
+                                <span>ID: {contract.contract_id}</span>
+                                <span>•</span>
+                                <span>Version: {contract.current_version_id}</span>
+                                {contract.carrier && (
+                                  <>
+                                    <span>•</span>
+                                    <span className="text-emerald-400">{contract.carrier}</span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          </SelectItem>
+                        )) : (
+                          <SelectItem value="no-contracts" disabled className="text-white hover:bg-white/10">
+                            {contractSearchTerm ? "No contracts match your search" : "No contracts found"}
+                          </SelectItem>
+                        )}
+                      </>
+                    )}
+                  </SelectContent>
+                </Select>
+              )}
+              
+              {/* Show alternative message when file is uploaded */}
+              {uploadedFile && (
+                <div className="text-center py-4 text-gray-400 text-sm border border-white/10 rounded-lg bg-white/5">
+                  Using uploaded PDF file for testing
+                </div>
+              )}
             </div>
-
 
             <div className="space-y-2">
               <label className="text-sm font-medium text-white">Choose Ground Truth</label>
               <Select value={selectedGroundTruth} onValueChange={(value) => {
                 setSelectedGroundTruth(value)
-                setSelectedGroundTruthVersion(groundTruth.find((groundTruthItem: any) => groundTruthItem.contract_id === value)?.current_version_id)
+                const groundTruthItem = groundTruth.find((gt: any) => gt.contract_id === value)
+                setSelectedGroundTruthVersion(groundTruthItem?.current_version_id)
               }}>
                 <SelectTrigger className="bg-white/5 border-white/10 text-white">
-                  <SelectValue />
+                  <SelectValue placeholder="Select ground truth..." />
                 </SelectTrigger>
                 <SelectContent className="bg-gray-900 border-white/20">
                   {isContractLoading ? (
                     <div className="text-white px-4 py-2">Loading...</div>
                   ) : (
                     <>
-                      {groundTruth.length > 0 ? groundTruth.map((groundTruthItem: any) => (
+                      {groundTruth.length > 5 && (
+                        <div className="px-3 py-2 border-b border-white/10">
+                          <div className="relative">
+                            <Search className="absolute left-2 top-2.5 h-4 w-4 text-gray-400" />
+                            <Input
+                              placeholder="Search ground truth..."
+                              value={groundTruthSearchTerm}
+                              onChange={(e) => setGroundTruthSearchTerm(e.target.value)}
+                              className="pl-8 h-8 bg-white/5 border-white/10 text-white placeholder:text-gray-400 focus:border-emerald-500"
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          </div>
+                        </div>
+                      )}
+                      {filteredGroundTruth.length > 0 ? filteredGroundTruth.map((groundTruthItem: any) => (
                         <SelectItem
                           key={groundTruthItem.contract_id}
                           value={groundTruthItem.contract_id}
                           className="text-white hover:bg-white/10"
                         >
-                          {groundTruthItem.contract_file_name} - {groundTruthItem?.carrier}
+                          <div className="flex flex-col">
+                            <span>{groundTruthItem.contract_file_name}</span>
+                            {groundTruthItem.carrier && (
+                              <span className="text-xs text-gray-400">{groundTruthItem.carrier}</span>
+                            )}
+                          </div>
                         </SelectItem>
                       )) : (
-                        <SelectItem value="no-ground-truth" className="text-white hover:bg-white/10">
-                          No ground truth found
+                        <SelectItem value="no-ground-truth" disabled className="text-white hover:bg-white/10">
+                          {groundTruthSearchTerm ? "No ground truth matches your search" : "No ground truth found"}
                         </SelectItem>
                       )}
                     </>
@@ -461,7 +931,18 @@ export function AccuracyTester() {
                 <div>
                   <label className="text-xs font-medium text-gray-400 uppercase tracking-wider">Selected Contract</label>
                   <div className="mt-2 p-3 bg-white/5 rounded-lg border border-white/10">
-                    {selectedContract && contracts.length > 0 ? (() => {
+                    {uploadedFile ? (
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <FileJson className="h-4 w-4 text-emerald-400" />
+                          <Badge variant="outline" className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30 text-xs">
+                            Uploaded PDF
+                          </Badge>
+                        </div>
+                        <p className="text-sm font-medium text-white">{uploadedFile.name}</p>
+                        <p className="text-xs text-gray-400">Ready for testing</p>
+                      </div>
+                    ) : selectedContract && contracts.length > 0 ? (() => {
                       const selectedContractData = contracts.find((c: any) => c.contract_id === selectedContract);
                       return selectedContractData ? (
                         <div>
@@ -506,6 +987,127 @@ export function AccuracyTester() {
         </Card>
       )}
 
+      {/* Test Run History - Always visible */}
+      <Card className="glass-card border-0">
+        <CardHeader className="border-b border-white/10">
+          <CardTitle className="text-lg text-white">Test Run History</CardTitle>
+          <CardDescription className="text-gray-400">
+            {testHistory.length > 0 ? "Recent test executions and their status" : "No test history available"}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="pt-6">
+          {testHistory.length > 0 ? (
+            <div className="space-y-4">
+              {testHistory.slice(0, 10).map((test, index) => {
+                const { date, time } = formatDateTime(test.created_at)
+                return (
+                  <div key={test.test_id || index} className="p-4 bg-white/5 rounded-lg border border-white/10 hover:bg-white/10 transition-colors">
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-2">
+                          <Badge
+                            variant="outline"
+                            className={`border-0 ${getStatusBadge(test.status)}`}
+                          >
+                            {test.status === 'processing' && (
+                              <div className="animate-pulse mr-1 h-2 w-2 rounded-full bg-current"></div>
+                            )}
+                            {test.status.charAt(0).toUpperCase() + test.status.slice(1)}
+                          </Badge>
+                          <Badge variant="outline" className="bg-purple-500/20 text-purple-300 border-purple-500/30">
+                            {test.test_type === 'upload' ? 'PDF Upload' : 'Contract Selection'}
+                          </Badge>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
+                          <div>
+                            <label className="text-xs text-gray-400 uppercase tracking-wider">Test ID</label>
+                            <p className="text-white font-mono">{test.test_id}</p>
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-400 uppercase tracking-wider">Date & Time</label>
+                            <p className="text-white">{date}</p>
+                            <p className="text-gray-400 text-xs">{time}</p>
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-400 uppercase tracking-wider">Contract</label>
+                            <p className="text-white truncate" title={test.contract_name}>
+                              {test.contract_name || 'Unknown'}
+                            </p>
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-400 uppercase tracking-wider">Prompts</label>
+                            <p className="text-white">{test.prompt_count} selected</p>
+                          </div>
+                        </div>
+                        {test.ground_truth_name && (
+                          <div className="mt-2 text-sm">
+                            <label className="text-xs text-gray-400 uppercase tracking-wider">Ground Truth</label>
+                            <p className="text-gray-300 truncate" title={test.ground_truth_name}>
+                              {test.ground_truth_name}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 ml-4">
+                        {test.status === 'completed' && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="border-white/20 text-white hover:bg-white/10"
+                            onClick={() => {
+                              // TODO: Implement view results
+                              toast({
+                                title: "View Results",
+                                description: "Results viewing will be implemented soon",
+                                variant: "default",
+                              })
+                            }}
+                          >
+                            View Results
+                          </Button>
+                        )}
+                        {test.status === 'processing' && activeTestId === test.test_id && (
+                          <div className="flex items-center gap-2 text-blue-400">
+                            <div className="animate-spin h-4 w-4 border-2 border-current border-t-transparent rounded-full"></div>
+                            <span className="text-sm">Processing...</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+              {testHistory.length > 10 && (
+                <div className="text-center pt-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-white/20 text-white hover:bg-white/10"
+                    onClick={() => {
+                      // TODO: Implement show all history
+                      toast({
+                        title: "View All History",
+                        description: "Full history view will be implemented soon",
+                        variant: "default",
+                      })
+                    }}
+                  >
+                    View All ({testHistory.length} tests)
+                  </Button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-center py-8">
+              <div className="text-gray-400 mb-2">
+                <Brain className="mx-auto h-12 w-12 opacity-50" />
+              </div>
+              <p className="text-gray-400">No tests have been run yet</p>
+              <p className="text-gray-500 text-sm">Start your first accuracy test to see results here</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Results */}
       {results && (
