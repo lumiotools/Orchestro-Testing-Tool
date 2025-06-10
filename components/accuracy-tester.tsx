@@ -58,6 +58,21 @@ interface ContractCategoryResult {
   groundTruthData: any[]
 }
 
+// Add interface for test history item with accuracy
+interface TestHistoryItem {
+  test_id: number
+  created_at: string
+  status: string
+  prompt_count: number
+  contract_name: string
+  ground_truth_name: string
+  test_type: string
+  extraction_time?: string | number
+  accuracy?: number
+  total_similarity?: number
+  [key: string]: any
+}
+
 // Remove old interface - using GroundTruthContract from loader instead
 
 const CATEGORY_DISPLAY_NAMES: Record<string, string> = {
@@ -93,12 +108,13 @@ export function AccuracyTester() {
   const [contractSearchTerm, setContractSearchTerm] = useState("")
   const [groundTruthSearchTerm, setGroundTruthSearchTerm] = useState("")
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
-  const [testHistory, setTestHistory] = useState<any[]>([])
+  const [testHistory, setTestHistory] = useState<TestHistoryItem[]>([])
   const [activeTestId, setActiveTestId] = useState<number | null>(null)
   const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null)
   const [selectedTestDetails, setSelectedTestDetails] = useState<any>(null)
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false)
   const [loadingTestId, setLoadingTestId] = useState<number | null>(null)
+  const [loadingAccuracyForTest, setLoadingAccuracyForTest] = useState<Set<number>>(new Set())
   const { toast } = useToast()
 
   // Hardcoded member_ids for now - will be replaced with proper auth later
@@ -501,12 +517,61 @@ export function AccuracyTester() {
             const serverTests = result.tests || []
             const existingIds = new Set(prev.map(test => test.test_id))
             const newTests = serverTests.filter((test: any) => !existingIds.has(test.test_id))
-            return [...prev, ...newTests].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+            const mergedTests = [...prev, ...newTests].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+            
+            // Fetch accuracy for completed tests that don't have it yet
+            mergedTests.forEach(test => {
+              if (test.status === 'completed' && !test.total_similarity && !loadingAccuracyForTest.has(test.test_id)) {
+                fetchTestAccuracy(test.test_id)
+              }
+            })
+            
+            return mergedTests
           })
         }
       }
     } catch (error) {
       console.error("Error fetching test history:", error)
+    }
+  }
+
+  // Fetch accuracy data for a specific test
+  const fetchTestAccuracy = async (testId: number) => {
+    if (loadingAccuracyForTest.has(testId)) return
+    
+    setLoadingAccuracyForTest(prev => new Set(prev).add(testId))
+    
+    try {
+      const response = await fetch(`${API_BASE_URL}/prompt/prompts/test/${testId}`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      })
+
+      if (response.ok) {
+        const result = await response.json()
+        if (result.accuracy_metrics?.total_similarity !== undefined) {
+          // Update the test history with accuracy data
+          setTestHistory(prev => prev.map(test => 
+            test.test_id === testId 
+              ? { 
+                  ...test, 
+                  total_similarity: result.accuracy_metrics.total_similarity,
+                  accuracy: result.accuracy_metrics.total_similarity / 100 // Convert to 0-1 range for compatibility
+                }
+              : test
+          ))
+        }
+      }
+    } catch (error) {
+      console.error(`Error fetching accuracy for test ${testId}:`, error)
+    } finally {
+      setLoadingAccuracyForTest(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(testId)
+        return newSet
+      })
     }
   }
 
@@ -1044,21 +1109,32 @@ export function AccuracyTester() {
       {/* Test Run History - Always visible */}
       <Card className="glass-card border-0">
         <CardHeader className="border-b border-white/10">
-                     <CardTitle className="text-lg text-white">Test Run History</CardTitle>
+          <CardTitle className="text-lg text-white">Test Run History</CardTitle>
           <CardDescription className="text-gray-400">
             {testHistory.length > 0 ? "Recent test executions and their status" : "No test history available"}
           </CardDescription>
         </CardHeader>
         <CardContent className="pt-6">
           {testHistory.length > 0 ? (
-            <div className="space-y-4">
+            <div className="space-y-3">
               {testHistory.slice(0, 10).map((test, index) => {
                 const { date, time } = formatDateTime(test.created_at)
+                const isLoadingAccuracy = loadingAccuracyForTest.has(test.test_id)
+                const hasAccuracy = test.total_similarity !== undefined && test.total_similarity !== null
+                
+                // Helper function to get accuracy label
+                const getAccuracyLabel = (score: number) => {
+                  if (score >= 90) return "Excellent"
+                  if (score >= 80) return "Good"
+                  if (score >= 70) return "Fair"
+                  return "Poor"
+                }
+                
                 return (
-                  <div key={test.test_id || index} className="p-4 bg-white/5 rounded-lg border border-white/10 hover:bg-white/10 transition-colors">
+                  <div key={test.test_id || index} className="p-3 bg-white/5 rounded-lg border border-white/10 hover:bg-white/10 transition-colors">
                     <div className="flex items-center justify-between">
                       <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-2">
+                        <div className="flex items-center gap-2 mb-2">
                           <Badge
                             variant="outline"
                             className={`border-0 ${getStatusBadge(test.status)}`}
@@ -1072,7 +1148,7 @@ export function AccuracyTester() {
                             {test.test_type === 'upload' ? 'PDF Upload' : 'Contract Selection'}
                           </Badge>
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 text-sm">
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
                           <div>
                             <label className="text-xs text-gray-400 uppercase tracking-wider">Test ID</label>
                             <p className="text-white font-mono">{test.test_id}</p>
@@ -1096,10 +1172,6 @@ export function AccuracyTester() {
                             <label className="text-xs text-gray-400 uppercase tracking-wider">Prompts</label>
                             <p className="text-white">{test.prompt_count} selected</p>
                           </div>
-                          <div>
-                            <label className="text-xs text-gray-400 uppercase tracking-wider">Accuracy</label>
-                            <p className="text-white">{test.accuracy ? `${(test.accuracy * 100).toFixed(1)}%` : 'N/A'}</p>
-                          </div>
                         </div>
                         {test.ground_truth_name && (
                           <div className="mt-2 text-sm">
@@ -1109,8 +1181,55 @@ export function AccuracyTester() {
                             </p>
                           </div>
                         )}
+                        
+                        {/* Accuracy Score Section */}
+                        {test.status === 'completed' && (
+                          <div className="mt-2 pt-2 border-t border-white/10">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <label className="text-xs text-gray-400 uppercase tracking-wider">Accuracy Score</label>
+                                {isLoadingAccuracy ? (
+                                  <div className="flex items-center gap-2 mt-1">
+                                    <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+                                    <p className="text-gray-400">Loading accuracy...</p>
+                                  </div>
+                                ) : hasAccuracy && test.total_similarity !== undefined ? (
+                                  <div className="flex items-center gap-2 mt-1">
+                                    <span className="text-xl font-bold text-white">
+                                      {test.total_similarity.toFixed(1)}%
+                                    </span>
+                                    <Badge
+                                      variant="outline"
+                                      className={`border-0 ${
+                                        test.total_similarity >= 90
+                                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                                          : test.total_similarity >= 80
+                                            ? 'bg-blue-500/20 text-blue-300 border-blue-500/30'
+                                            : test.total_similarity >= 70
+                                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                                              : 'bg-red-500/20 text-red-300 border-red-500/30'
+                                      }`}
+                                    >
+                                      {getAccuracyLabel(test.total_similarity)}
+                                    </Badge>
+                                  </div>
+                                ) : (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="mt-1 h-7 px-2 text-sm text-blue-400 hover:bg-blue-500/20"
+                                    onClick={() => fetchTestAccuracy(test.test_id)}
+                                  >
+                                    <BarChart3 className="h-3 w-3 mr-1" />
+                                    Load Accuracy
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                      <div className="flex items-center gap-2 ml-4">
+                      <div className="flex items-center gap-2 ml-3">
                         {test.status === 'completed' && (
                           <Button
                             variant="outline"
@@ -1144,7 +1263,7 @@ export function AccuracyTester() {
                 )
               })}
               {testHistory.length > 10 && (
-                <div className="text-center pt-4">
+                <div className="text-center pt-3">
                   <Button
                     variant="outline"
                     size="sm"
@@ -1164,9 +1283,9 @@ export function AccuracyTester() {
               )}
             </div>
           ) : (
-            <div className="text-center py-8">
+            <div className="text-center py-6">
               <div className="text-gray-400 mb-2">
-                <Brain className="mx-auto h-12 w-12 opacity-50" />
+                <Brain className="mx-auto h-10 w-10 opacity-50" />
               </div>
               <p className="text-gray-400">No tests have been run yet</p>
               <p className="text-gray-500 text-sm">Start your first accuracy test to see results here</p>
@@ -1316,7 +1435,7 @@ export function AccuracyTester() {
           setLoadingTestId(null)
         }
       }}>
-        <DialogContent className="max-w-6xl max-h-[90vh] bg-gray-900 border-white/20 text-white">
+        <DialogContent className="max-w-6xl max-h-[90vh] bg-gray-900/95 backdrop-blur-sm border-white/20 text-white">
           <DialogHeader>
             <DialogTitle className="text-xl text-white flex items-center gap-2">
               <BarChart3 className="h-5 w-5" />
@@ -1342,7 +1461,7 @@ export function AccuracyTester() {
                       <div className="text-center">
                         <div className="text-2xl font-bold text-emerald-400">
                           {selectedTestDetails.accuracy_metrics?.overall_similarity 
-                            ? `${(selectedTestDetails.accuracy_metrics.overall_similarity * 100).toFixed(1)}%`
+                            ? `${selectedTestDetails.accuracy_metrics.overall_similarity.toFixed(1)}%`
                             : 'N/A'}
                         </div>
                         <p className="text-sm text-gray-400">Overall Accuracy</p>
@@ -1352,7 +1471,7 @@ export function AccuracyTester() {
                   <Card className="bg-white/5 border-white/10">
                     <CardContent className="pt-4">
                       <div className="text-center">
-                        <div className="text-2xl font-bold text-white">
+                        <div className="text-2xl font-bold text-blue-400">
                           {formatExtractionTime(selectedTestDetails.extraction_time)}
                         </div>
                         <p className="text-sm text-gray-400">Extraction Time</p>
@@ -1362,7 +1481,7 @@ export function AccuracyTester() {
                   <Card className="bg-white/5 border-white/10">
                     <CardContent className="pt-4">
                       <div className="text-center">
-                        <div className="text-2xl font-bold text-blue-400">
+                        <div className="text-2xl font-bold text-purple-400">
                           {selectedTestDetails.extraction_results?.total_tables || 0}
                         </div>
                         <p className="text-sm text-gray-400">Tables Extracted</p>
@@ -1372,7 +1491,7 @@ export function AccuracyTester() {
                   <Card className="bg-white/5 border-white/10">
                     <CardContent className="pt-4">
                       <div className="text-center">
-                        <div className="text-2xl font-bold text-purple-400">
+                        <div className="text-2xl font-bold text-amber-400">
                           {selectedTestDetails.extraction_results?.carrier || 'N/A'}
                         </div>
                         <p className="text-sm text-gray-400">Carrier</p>
@@ -1383,35 +1502,41 @@ export function AccuracyTester() {
 
                 {/* Test Information */}
                 <Card className="bg-white/5 border-white/10">
-                  <CardHeader>
+                  <CardHeader className="pb-3">
                     <CardTitle className="text-lg text-white flex items-center gap-2">
                       <FileText className="h-5 w-5" />
                       Test Information
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <label className="text-xs text-gray-400 uppercase tracking-wider">Contract Name</label>
-                        <p className="text-white">{selectedTestDetails.contract_name || 'N/A'}</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
+                      <div className="space-y-3">
+                        <div>
+                          <label className="text-xs text-gray-400 uppercase tracking-wider font-medium">Contract Name</label>
+                          <p className="text-white mt-1">{selectedTestDetails.contract_name || 'N/A'}</p>
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-400 uppercase tracking-wider font-medium">Created At</label>
+                          <p className="text-white mt-1">
+                            {selectedTestDetails.created_at 
+                              ? new Date(selectedTestDetails.created_at).toLocaleString()
+                              : 'N/A'}
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <label className="text-xs text-gray-400 uppercase tracking-wider">Test Status</label>
-                        <Badge variant="outline" className={`border-0 ${getStatusBadge(selectedTestDetails.status)}`}>
-                          {selectedTestDetails.status}
-                        </Badge>
-                      </div>
-                      <div>
-                        <label className="text-xs text-gray-400 uppercase tracking-wider">Created At</label>
-                        <p className="text-white">
-                          {selectedTestDetails.created_at 
-                            ? new Date(selectedTestDetails.created_at).toLocaleString()
-                            : 'N/A'}
-                        </p>
-                      </div>
-                      <div>
-                        <label className="text-xs text-gray-400 uppercase tracking-wider">Upload Mode</label>
-                        <p className="text-white">{selectedTestDetails.upload_mode ? 'Yes' : 'No'}</p>
+                      <div className="space-y-3">
+                        <div>
+                          <label className="text-xs text-gray-400 uppercase tracking-wider font-medium">Test Status</label>
+                          <div className="mt-1">
+                            <Badge variant="outline" className={`border-0 ${getStatusBadge(selectedTestDetails.status)}`}>
+                              {selectedTestDetails.status}
+                            </Badge>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="text-xs text-gray-400 uppercase tracking-wider font-medium">Upload Mode</label>
+                          <p className="text-white mt-1">{selectedTestDetails.upload_mode ? 'Yes' : 'No'}</p>
+                        </div>
                       </div>
                     </div>
                   </CardContent>
@@ -1419,7 +1544,7 @@ export function AccuracyTester() {
 
                 {/* Category-wise Results - Enhanced UI */}
                 <Card className="bg-white/5 border-white/10">
-                  <CardHeader>
+                  <CardHeader className="pb-3">
                     <CardTitle className="text-lg text-white flex items-center gap-2">
                       <TableIcon className="h-5 w-5" />
                       Category-wise Results
@@ -1437,23 +1562,35 @@ export function AccuracyTester() {
                         return (
                           <div className="space-y-6">
                             {/* Summary Stats */}
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-white/5 rounded-lg border border-white/10">
-                              <div className="text-center">
-                                <div className="text-2xl font-bold text-blue-400">{totalCategories}</div>
-                                <p className="text-sm text-gray-400">Total Categories</p>
-                              </div>
-                              <div className="text-center">
-                                <div className="text-2xl font-bold text-emerald-400">
-                                  {categories.filter(([_, result]) => result.similarity_score >= 90).length}
-                                </div>
-                                <p className="text-sm text-gray-400">Excellent (≥90%)</p>
-                              </div>
-                              <div className="text-center">
-                                <div className="text-2xl font-bold text-amber-400">
-                                  {categories.filter(([_, result]) => result.similarity_score < 90).length}
-                                </div>
-                                <p className="text-sm text-gray-400">Needs Review (&lt;90%)</p>
-                              </div>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                              <Card className="bg-gray-800/50 border-gray-700/50">
+                                <CardContent className="pt-4">
+                                  <div className="text-center">
+                                    <div className="text-2xl font-bold text-blue-400">{totalCategories}</div>
+                                    <p className="text-sm text-gray-400">Total Categories</p>
+                                  </div>
+                                </CardContent>
+                              </Card>
+                              <Card className="bg-emerald-500/10 border-emerald-500/30">
+                                <CardContent className="pt-4">
+                                  <div className="text-center">
+                                    <div className="text-2xl font-bold text-emerald-400">
+                                      {categories.filter(([_, result]: [string, any]) => (result as any).similarity_score >= 90).length}
+                                    </div>
+                                    <p className="text-sm text-emerald-300">Excellent (≥90%)</p>
+                                  </div>
+                                </CardContent>
+                              </Card>
+                              <Card className="bg-amber-500/10 border-amber-500/30">
+                                <CardContent className="pt-4">
+                                  <div className="text-center">
+                                    <div className="text-2xl font-bold text-amber-400">
+                                      {categories.filter(([_, result]: [string, any]) => (result as any).similarity_score < 90).length}
+                                    </div>
+                                    <p className="text-sm text-amber-300">Needs Review (&lt;90%)</p>
+                                  </div>
+                                </CardContent>
+                              </Card>
                             </div>
 
                             {/* Category Results */}
@@ -1470,132 +1607,147 @@ export function AccuracyTester() {
                                 const matchedRows = actualRows - extraRows;
                                 
                                 return (
-                                  <div key={category} className="p-4 bg-white/5 rounded-lg border border-white/10">
-                                    <div className="flex items-center justify-between mb-4">
-                                      <h4 className="text-white font-medium text-lg">
-                                        {CATEGORY_DISPLAY_NAMES[category] || category.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                                      </h4>
-                                      <Badge 
-                                        variant="outline" 
-                                        className={`border-0 ${
-                                          similarityScore >= 95 ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' :
-                                          similarityScore >= 90 ? 'bg-blue-500/20 text-blue-300 border-blue-500/30' :
-                                          similarityScore >= 75 ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' :
-                                          'bg-red-500/20 text-red-300 border-red-500/30'
-                                        }`}
-                                      >
-                                        {similarityScore.toFixed(1)}%
-                                      </Badge>
-                                    </div>
-                                    
-                                    {/* Metrics Grid */}
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                                      <div className="text-center p-3 bg-emerald-500/10 rounded-lg border border-emerald-500/20">
-                                        <div className="text-2xl font-bold text-emerald-400">
-                                          {matchedRows}
-                                        </div>
-                                        <p className="text-xs text-emerald-300">Rows Matched</p>
+                                  <Card key={category} className="bg-gray-800/30 border-gray-700/50">
+                                    <CardContent className="pt-4">
+                                      <div className="flex items-center justify-between mb-4">
+                                        <h4 className="text-white font-medium text-lg">
+                                          {CATEGORY_DISPLAY_NAMES[category] || category.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                        </h4>
+                                        <Badge 
+                                          variant="outline" 
+                                          className={`border-0 text-sm px-3 py-1 ${
+                                            similarityScore >= 95 ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' :
+                                            similarityScore >= 90 ? 'bg-blue-500/20 text-blue-300 border-blue-500/30' :
+                                            similarityScore >= 75 ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' :
+                                            'bg-red-500/20 text-red-300 border-red-500/30'
+                                          }`}
+                                        >
+                                          {similarityScore.toFixed(1)}%
+                                        </Badge>
                                       </div>
-                                      <div className="text-center p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
-                                        <div className="text-2xl font-bold text-blue-400">
-                                          {expectedRows}
-                                        </div>
-                                        <p className="text-xs text-blue-300">Expected Rows</p>
-                                      </div>
-                                      <div className="text-center p-3 bg-red-500/10 rounded-lg border border-red-500/20">
-                                        <div className="text-2xl font-bold text-red-400">
-                                          {missingRows}
-                                        </div>
-                                        <p className="text-xs text-red-300">Missing Rows</p>
-                                      </div>
-                                      <div className="text-center p-3 bg-amber-500/10 rounded-lg border border-amber-500/20">
-                                        <div className="text-2xl font-bold text-amber-400">
-                                          {extraRows}
-                                        </div>
-                                        <p className="text-xs text-amber-300">Extra Rows</p>
-                                      </div>
-                                    </div>
-
-                                    {/* Progress Bar */}
-                                    <div className="space-y-2 mb-4">
-                                      <div className="flex justify-between text-sm">
-                                        <span className="text-gray-400">Similarity Score</span>
-                                        <span className="text-white">{similarityScore.toFixed(1)}%</span>
-                                      </div>
-                                      <Progress 
-                                        value={similarityScore} 
-                                        className="h-2 bg-white/10"
-                                      />
-                                    </div>
-
-                                    {/* Row Details and Extra Row Information */}
-                                    {(missingRows > 0 || extraRows > 0) && (
-                                      <div className="space-y-3">
-                                        {/* Data Discrepancies Summary */}
-                                        <div className="p-3 bg-white/5 rounded border border-white/10">
-                                          <div className="flex items-center gap-2 mb-2">
-                                            <AlertCircle className="h-4 w-4 text-amber-400" />
-                                            <span className="text-sm font-medium text-amber-400">Data Discrepancies</span>
+                                      
+                                      {/* Metrics Grid */}
+                                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                                        <div className="text-center p-3 bg-emerald-500/10 rounded-lg border border-emerald-500/20">
+                                          <div className="text-xl font-bold text-emerald-400">
+                                            {matchedRows}
                                           </div>
-                                          <div className="text-sm text-gray-300 space-y-1">
-                                            {missingRows > 0 && (
-                                              <p>• {missingRows} row(s) missing from extraction</p>
-                                            )}
-                                            {extraRows > 0 && (
-                                              <p>• {extraRows} extra row(s) found in extraction</p>
-                                            )}
-                                          </div>
+                                          <p className="text-xs text-emerald-300">Rows Matched</p>
                                         </div>
+                                        <div className="text-center p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                                          <div className="text-xl font-bold text-blue-400">
+                                            {expectedRows}
+                                          </div>
+                                          <p className="text-xs text-blue-300">Expected Rows</p>
+                                        </div>
+                                        <div className="text-center p-3 bg-red-500/10 rounded-lg border border-red-500/20">
+                                          <div className="text-xl font-bold text-red-400">
+                                            {missingRows}
+                                          </div>
+                                          <p className="text-xs text-red-300">Missing Rows</p>
+                                        </div>
+                                        <div className="text-center p-3 bg-amber-500/10 rounded-lg border border-amber-500/20">
+                                          <div className="text-xl font-bold text-amber-400">
+                                            {extraRows}
+                                          </div>
+                                          <p className="text-xs text-amber-300">Extra Rows</p>
+                                        </div>
+                                      </div>
 
-                                        {/* Extra Row Details */}
-                                        {extraRows > 0 && extraRowDetails.length > 0 && (
-                                          <div className="p-3 bg-amber-500/10 rounded border border-amber-500/20">
-                                            <h5 className="text-sm font-medium text-amber-300 mb-2 flex items-center gap-2">
-                                              <FileText className="h-4 w-4" />
-                                              Extra Row Details
-                                            </h5>
-                                            <div className="space-y-2">
-                                              {extraRowDetails.map((detail: any, index: number) => (
-                                                <div key={index} className="p-2 bg-white/5 rounded text-xs">
-                                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                                                    {detail.name && (
-                                                      <div>
-                                                        <span className="text-gray-400">Name:</span>
-                                                        <span className="text-white ml-1">{detail.name}</span>
-                                                      </div>
-                                                    )}
-                                                    {detail.term && (
-                                                      <div>
-                                                        <span className="text-gray-400">Term:</span>
-                                                        <span className="text-white ml-1">{detail.term}</span>
-                                                      </div>
-                                                    )}
-                                                    {detail.discount && (
-                                                      <div>
-                                                        <span className="text-gray-400">Discount:</span>
-                                                        <span className="text-white ml-1">{detail.discount}</span>
-                                                      </div>
-                                                    )}
-                                                  </div>
-                                                </div>
-                                              ))}
+                                      {/* Progress Bar */}
+                                      <div className="space-y-2 mb-4">
+                                        <div className="flex justify-between text-sm">
+                                          <span className="text-gray-400">Similarity Score</span>
+                                          <span className="text-white font-medium">{similarityScore.toFixed(1)}%</span>
+                                        </div>
+                                        <div className="w-full bg-gray-700 rounded-full h-2">
+                                          <div 
+                                            className={`h-2 rounded-full transition-all duration-300 ${
+                                              similarityScore >= 90 ? 'bg-emerald-500' :
+                                              similarityScore >= 75 ? 'bg-amber-500' :
+                                              'bg-red-500'
+                                            }`}
+                                            style={{ width: `${Math.min(similarityScore, 100)}%` }}
+                                          ></div>
+                                        </div>
+                                      </div>
+
+                                      {/* Row Details and Extra Row Information */}
+                                      {(missingRows > 0 || extraRows > 0) && (
+                                        <div className="space-y-3">
+                                          {/* Data Discrepancies Summary */}
+                                          <div className="p-3 bg-amber-500/10 rounded-lg border border-amber-500/20">
+                                            <div className="flex items-center gap-2 mb-2">
+                                              <AlertCircle className="h-4 w-4 text-amber-400" />
+                                              <span className="text-sm font-medium text-amber-400">Data Discrepancies</span>
+                                            </div>
+                                            <div className="text-sm text-gray-300 space-y-1">
+                                              {missingRows > 0 && (
+                                                <p>• {missingRows} row(s) missing from extraction</p>
+                                              )}
+                                              {extraRows > 0 && (
+                                                <p>• {extraRows} extra row(s) found in extraction</p>
+                                              )}
                                             </div>
                                           </div>
-                                        )}
-                                      </div>
-                                    )}
 
-                                    {/* Success Message */}
-                                    {results.message && (
-                                      <div className={`mt-3 p-2 rounded text-sm ${
-                                        results.message.toLowerCase().includes('success') 
-                                          ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'
-                                          : 'bg-blue-500/10 text-blue-300 border border-blue-500/20'
-                                      }`}>
-                                        <span className="font-medium">Status:</span> {results.message}
-                                      </div>
-                                    )}
-                                  </div>
+                                          {/* Extra Row Details */}
+                                          {extraRows > 0 && extraRowDetails.length > 0 && (
+                                            <div className="p-3 bg-gray-800/50 rounded-lg border border-gray-600/30">
+                                              <h5 className="text-sm font-medium text-amber-300 mb-2 flex items-center gap-2">
+                                                <FileText className="h-4 w-4" />
+                                                Extra Row Details ({extraRowDetails.length} items)
+                                              </h5>
+                                              <div className="space-y-2 max-h-32 overflow-y-auto">
+                                                {extraRowDetails.slice(0, 5).map((detail: any, index: number) => (
+                                                  <div key={index} className="p-2 bg-gray-700/50 rounded text-xs border border-gray-600/30">
+                                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                                                      {detail.name && (
+                                                        <div>
+                                                          <span className="text-gray-400">Name:</span>
+                                                          <span className="text-white ml-1">{detail.name}</span>
+                                                        </div>
+                                                      )}
+                                                      {detail.term && (
+                                                        <div>
+                                                          <span className="text-gray-400">Term:</span>
+                                                          <span className="text-white ml-1">{detail.term}</span>
+                                                        </div>
+                                                      )}
+                                                      {detail.discount && (
+                                                        <div>
+                                                          <span className="text-gray-400">Discount:</span>
+                                                          <span className="text-white ml-1">{detail.discount}</span>
+                                                        </div>
+                                                      )}
+                                                    </div>
+                                                  </div>
+                                                ))}
+                                                {extraRowDetails.length > 5 && (
+                                                  <p className="text-xs text-gray-400 text-center">
+                                                    ... and {extraRowDetails.length - 5} more items
+                                                  </p>
+                                                )}
+                                              </div>
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+
+                                      {/* Success Message */}
+                                      {results.message && (
+                                        <div className={`mt-3 p-2 rounded text-sm border ${
+                                          results.message.toLowerCase().includes('success') 
+                                            ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
+                                            : results.message.toLowerCase().includes('missing')
+                                              ? 'bg-blue-500/10 text-blue-300 border-blue-500/20'
+                                              : 'bg-amber-500/10 text-amber-300 border-amber-500/20'
+                                        }`}>
+                                          <span className="font-medium">Status:</span> {results.message}
+                                        </div>
+                                      )}
+                                    </CardContent>
+                                  </Card>
                                 );
                               })}
                             </div>
@@ -1610,15 +1762,29 @@ export function AccuracyTester() {
                           <p className="text-gray-400">No category-wise results available</p>
                           <p className="text-gray-500 text-sm mb-4">This test may not have completed successfully or accuracy analysis was not performed.</p>
                           {selectedTestDetails.accuracy_metrics && (
-                            <div className="text-left mt-4 p-3 bg-black/20 rounded">
-                              <p className="text-xs text-gray-400 mb-2">Available accuracy data:</p>
-                              <ul className="text-xs text-gray-300 space-y-1">
-                                <li>• Overall Similarity: {selectedTestDetails.accuracy_metrics.overall_similarity?.toFixed(1)}%</li>
-                                <li>• Total Rows: {selectedTestDetails.accuracy_metrics.total_rows}</li>
-                                <li>• Missing Rows: {selectedTestDetails.accuracy_metrics.missing_rows}</li>
-                                <li>• Extra Rows: {selectedTestDetails.accuracy_metrics.extra_rows}</li>
-                              </ul>
-                            </div>
+                            <Card className="text-left mt-4 bg-gray-800/30 border-gray-700/50">
+                              <CardContent className="pt-3">
+                                <p className="text-xs text-gray-400 mb-2">Available accuracy data:</p>
+                                <div className="text-xs text-gray-300 space-y-1">
+                                  <div className="flex justify-between">
+                                    <span>Overall Similarity:</span>
+                                    <span>{selectedTestDetails.accuracy_metrics.overall_similarity?.toFixed(1)}%</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span>Total Rows:</span>
+                                    <span>{selectedTestDetails.accuracy_metrics.total_rows}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span>Missing Rows:</span>
+                                    <span>{selectedTestDetails.accuracy_metrics.missing_rows}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span>Extra Rows:</span>
+                                    <span>{selectedTestDetails.accuracy_metrics.extra_rows}</span>
+                                  </div>
+                                </div>
+                              </CardContent>
+                            </Card>
                           )}
                         </div>
                       );
