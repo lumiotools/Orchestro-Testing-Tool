@@ -69,7 +69,7 @@ interface TestHistoryItem {
   test_type: string
   extraction_time?: string | number
   accuracy?: number
-  total_similarity?: number
+  overall_similarity?: number
   [key: string]: any
 }
 
@@ -521,7 +521,7 @@ export function AccuracyTester() {
             
             // Fetch accuracy for completed tests that don't have it yet
             mergedTests.forEach(test => {
-              if (test.status === 'completed' && !test.total_similarity && !loadingAccuracyForTest.has(test.test_id)) {
+              if (test.status === 'completed' && !test.overall_similarity && !loadingAccuracyForTest.has(test.test_id)) {
                 fetchTestAccuracy(test.test_id)
               }
             })
@@ -551,14 +551,14 @@ export function AccuracyTester() {
 
       if (response.ok) {
         const result = await response.json()
-        if (result.accuracy_metrics?.total_similarity !== undefined) {
+        if (result.accuracy_metrics?.overall_similarity !== undefined) {
           // Update the test history with accuracy data
           setTestHistory(prev => prev.map(test => 
             test.test_id === testId 
               ? { 
                   ...test, 
-                  total_similarity: result.accuracy_metrics.total_similarity,
-                  accuracy: result.accuracy_metrics.total_similarity / 100 // Convert to 0-1 range for compatibility
+                  overall_similarity: result.accuracy_metrics.overall_similarity,
+                  accuracy: result.accuracy_metrics.overall_similarity / 100 // Convert to 0-1 range for compatibility
                 }
               : test
           ))
@@ -1120,7 +1120,7 @@ export function AccuracyTester() {
               {testHistory.slice(0, 10).map((test, index) => {
                 const { date, time } = formatDateTime(test.created_at)
                 const isLoadingAccuracy = loadingAccuracyForTest.has(test.test_id)
-                const hasAccuracy = test.total_similarity !== undefined && test.total_similarity !== null
+                const hasAccuracy = test.overall_similarity !== undefined && test.overall_similarity !== null
                 
                 // Helper function to get accuracy label
                 const getAccuracyLabel = (score: number) => {
@@ -1193,24 +1193,24 @@ export function AccuracyTester() {
                                     <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
                                     <p className="text-gray-400">Loading accuracy...</p>
                                   </div>
-                                ) : hasAccuracy && test.total_similarity !== undefined ? (
+                                ) : hasAccuracy && test.overall_similarity !== undefined ? (
                                   <div className="flex items-center gap-2 mt-1">
                                     <span className="text-xl font-bold text-white">
-                                      {test.total_similarity.toFixed(1)}%
+                                      {test.overall_similarity.toFixed(1)}%
                                     </span>
                                     <Badge
                                       variant="outline"
                                       className={`border-0 ${
-                                        test.total_similarity >= 90
+                                        test.overall_similarity >= 90
                                           ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-                                          : test.total_similarity >= 80
+                                          : test.overall_similarity >= 80
                                             ? 'bg-blue-500/20 text-blue-300 border-blue-500/30'
-                                            : test.total_similarity >= 70
+                                            : test.overall_similarity >= 70
                                               ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
                                               : 'bg-red-500/20 text-red-300 border-red-500/30'
                                       }`}
                                     >
-                                      {getAccuracyLabel(test.total_similarity)}
+                                      {getAccuracyLabel(test.overall_similarity)}
                                     </Badge>
                                   </div>
                                 ) : (
@@ -1690,47 +1690,6 @@ export function AccuracyTester() {
                                               )}
                                             </div>
                                           </div>
-
-                                          {/* Extra Row Details */}
-                                          {extraRows > 0 && extraRowDetails.length > 0 && (
-                                            <div className="p-3 bg-gray-800/50 rounded-lg border border-gray-600/30">
-                                              <h5 className="text-sm font-medium text-amber-300 mb-2 flex items-center gap-2">
-                                                <FileText className="h-4 w-4" />
-                                                Extra Row Details ({extraRowDetails.length} items)
-                                              </h5>
-                                              <div className="space-y-2 max-h-32 overflow-y-auto">
-                                                {extraRowDetails.slice(0, 5).map((detail: any, index: number) => (
-                                                  <div key={index} className="p-2 bg-gray-700/50 rounded text-xs border border-gray-600/30">
-                                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                                                      {detail.name && (
-                                                        <div>
-                                                          <span className="text-gray-400">Name:</span>
-                                                          <span className="text-white ml-1">{detail.name}</span>
-                                                        </div>
-                                                      )}
-                                                      {detail.term && (
-                                                        <div>
-                                                          <span className="text-gray-400">Term:</span>
-                                                          <span className="text-white ml-1">{detail.term}</span>
-                                                        </div>
-                                                      )}
-                                                      {detail.discount && (
-                                                        <div>
-                                                          <span className="text-gray-400">Discount:</span>
-                                                          <span className="text-white ml-1">{detail.discount}</span>
-                                                        </div>
-                                                      )}
-                                                    </div>
-                                                  </div>
-                                                ))}
-                                                {extraRowDetails.length > 5 && (
-                                                  <p className="text-xs text-gray-400 text-center">
-                                                    ... and {extraRowDetails.length - 5} more items
-                                                  </p>
-                                                )}
-                                              </div>
-                                            </div>
-                                          )}
                                         </div>
                                       )}
 
